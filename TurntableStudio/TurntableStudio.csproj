@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>TurntableStudio</AssemblyName>
+    <RootNamespace>TurntableStudio</RootNamespace>
+    <Nullable>enable</Nullable>
+    <LangVersion>9.0</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Huateng.Turntable.Sdk">
+      <HintPath>..\libs\Huateng.Turntable.Sdk.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\libs\SonyCrBridge.dll" Condition="Exists('..\libs\SonyCrBridge.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\libs\Cr_Core.dll" Condition="Exists('..\libs\Cr_Core.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <PropertyGroup>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+</Project>
