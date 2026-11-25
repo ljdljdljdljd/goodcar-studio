@@ -105,21 +105,51 @@ namespace TurntableStudio.Services
                         await Task.Delay(2000, ct); // 给 Stop 后的惯性滑行留足时间
                     }
 
-                    Log?.Invoke(this, $"[{i + 1}/{shotCount}] 转动到 {targetAngle:F1}°（第{attempt}次）");
+                    Log?.Invoke(this, $"[{i + 1}/{shotCount}] 步进第 {i + 1} 张（第{attempt}次）");
 
                     try
                     {
-                        // 1. 转盘移动并等待停稳
-                        // 超时动态计算：角度差 / 估算速度 * 2倍余量，最少30s，最多120s
-                        double currentForTimeout = _turntable.ReadAngle();
-                        double angDiff = Math.Abs(currentForTimeout - targetAngle);
-                        if (angDiff > 180) angDiff = 360 - angDiff;
-                        // 粗估：230mm/s、24690脉冲/度 → 约1°/s，5°需约5s；给60s兜底
-                        int dynamicTimeout = (int)Math.Max(30000, Math.Min(120000, angDiff * 1000 * 3 + 5000));
-                        var sw = System.Diagnostics.Stopwatch.StartNew();
-                        await _turntable.MoveToAsync(targetAngle, toleranceDeg: 0.5,
-                            stabilizeMs: 500, timeoutMs: dynamicTimeout);
+                        // 1. 发 Start() 步进脉冲，等转盘动起来再停稳
+                        // 不调 MoveTo，不改目标寄存器，HMI 旋转角度设定始终 360°
+                        // 拍摄方向固定正转，避免 PLC 使用上次手动遗留的方向状态
+                        double angleBefore = _turntable.ReadAngle();
+                        _turntable.SetDirection(true); // 固定正转
+                        _turntable.StartRotation();
+
+                        // 等转盘开始移动（最多 5s）
+                        var moveStart = System.Diagnostics.Stopwatch.StartNew();
+                        while (moveStart.ElapsedMilliseconds < 5000)
+                        {
+                            await Task.Delay(200, ct);
+                            double a = _turntable.ReadAngle();
+                            double diff = Math.Abs(a - angleBefore);
+                            if (diff > 180) diff = 360 - diff;
+                            if (diff >= 0.5) break;
+                        }
+
+                        // 等转盘停稳（角度连续 500ms 变化 < 0.3°，最多 30s）
+                        double lastAngle = _turntable.ReadAngle();
+                        var stableStart = System.Diagnostics.Stopwatch.StartNew();
+                        var totalWait = System.Diagnostics.Stopwatch.StartNew();
+                        while (totalWait.ElapsedMilliseconds < 30000)
+                        {
+                            await Task.Delay(200, ct);
+                            double cur = _turntable.ReadAngle();
+                            double moved = Math.Abs(cur - lastAngle);
+                            if (moved > 180) moved = 360 - moved;
+                            if (moved >= 0.3)
+                            {
+                                lastAngle = cur;
+                                stableStart.Restart();
+                            }
+                            else if (stableStart.ElapsedMilliseconds >= 500)
+                            {
+                                break; // 停稳
+                            }
+                        }
+
                         double actualAngle = _turntable.ReadAngle();
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
 
                         // 2. 配置保存路径并触发快门
                         // 删除可能存在的旧文件（重试场景）
