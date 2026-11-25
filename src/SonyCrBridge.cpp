@@ -694,7 +694,7 @@ SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_GetDeviceCount(void)
     auto& state = State();
     std::lock_guard<std::mutex> apiLock(state.apiMutex);
     if (!state.initialized) { state.SetError("Not initialized."); return CrBridge_Error_NotInitialized; }
-    if (state.devices == nullptr) return 0;
+    if (!state.RefreshDevices()) return CrBridge_Error_Sdk;
     return static_cast<int32_t>(state.devices->GetCount());
 }
 
