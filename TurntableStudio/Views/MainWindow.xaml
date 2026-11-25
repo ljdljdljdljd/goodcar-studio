@@ -337,6 +337,81 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- ⑥ 转盘控制 -->
+                    <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="12" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="转盘控制" FontWeight="Bold" FontSize="14" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,10"/>
+
+                            <!-- 参数行 -->
+                            <Grid Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                                    <TextBlock Text="速度" Style="{StaticResource Label}"/>
+                                    <TextBox Text="{Binding TurntableSpeed, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Input}" IsEnabled="{Binding PlcConnected}"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="4,0">
+                                    <TextBlock Text="脉冲数" Style="{StaticResource Label}"/>
+                                    <TextBox Text="{Binding TurntablePulse, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Input}" IsEnabled="{Binding PlcConnected}"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Margin="4,0,0,0">
+                                    <TextBlock Text="加减速(ms)" Style="{StaticResource Label}"/>
+                                    <TextBox Text="{Binding TurntableAccelDecel, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Input}" IsEnabled="{Binding PlcConnected}"/>
+                                </StackPanel>
+                            </Grid>
+                            <Button Content="写入参数" Command="{Binding WriteParamsCommand}" Style="{StaticResource ActionBtn}" Margin="0,0,0,10"
+                                    IsEnabled="{Binding PlcConnected}" HorizontalAlignment="Left" Padding="16,6"/>
+
+                            <!-- 目标角度 + 方向 -->
+                            <Grid Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                    <TextBlock Text="目标角度 (°)" Style="{StaticResource Label}"/>
+                                    <TextBox Text="{Binding TargetAngle, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Input}" IsEnabled="{Binding PlcConnected}"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Bottom">
+                                    <RadioButton Content="正转" IsChecked="{Binding IsForwardDirection}" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,4" IsEnabled="{Binding PlcConnected}"/>
+                                    <RadioButton Content="反转" IsChecked="{Binding IsForwardDirection, Converter={x:Static vm:InvertBoolConverter.Instance}}" Foreground="{StaticResource TextPrimary}" IsEnabled="{Binding PlcConnected}"/>
+                                </StackPanel>
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                <Button Content="▶ 正转到目标" Command="{Binding MoveForwardCommand}" Style="{StaticResource ActionBtn}"
+                                        IsEnabled="{Binding PlcConnected}" Margin="0,0,6,0" Padding="12,6"/>
+                                <Button Content="◀ 反转到目标" Command="{Binding MoveReverseCommand}" Style="{StaticResource ActionBtn}"
+                                        IsEnabled="{Binding PlcConnected}" Padding="12,6"/>
+                            </StackPanel>
+
+                            <!-- 手动点动 -->
+                            <TextBlock Text="手动点动（按住转动，松开停止）" Style="{StaticResource Label}" Margin="0,0,0,4"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                <Button Content="手动正转 ▶" Style="{StaticResource ActionBtn}" IsEnabled="{Binding PlcConnected}"
+                                        Margin="0,0,6,0" Padding="12,6"
+                                        PreviewMouseLeftButtonDown="ManualForwardDown"
+                                        PreviewMouseLeftButtonUp="ManualJogUp"/>
+                                <Button Content="◀ 手动反转" Style="{StaticResource ActionBtn}" IsEnabled="{Binding PlcConnected}"
+                                        Padding="12,6"
+                                        PreviewMouseLeftButtonDown="ManualReverseDown"
+                                        PreviewMouseLeftButtonUp="ManualJogUp"/>
+                            </StackPanel>
+
+                            <!-- 启停 + 回零 -->
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="▶ 启动" Command="{Binding StartRotationCommand}" Style="{StaticResource ActionBtn}"
+                                        IsEnabled="{Binding PlcConnected}" Margin="0,0,6,0" Padding="12,6"/>
+                                <Button Content="■ 停止" Command="{Binding StopRotationCommand}" Style="{StaticResource ActionBtn}"
+                                        IsEnabled="{Binding PlcConnected}" Margin="0,0,6,0" Padding="12,6"/>
+                                <Button Content="⌂ 零点确认" Command="{Binding GoHomeCommand}" Style="{StaticResource ActionBtn}"
+                                        IsEnabled="{Binding PlcConnected}" Padding="12,6"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
                     <!-- ⑤ 彩色日志流（ItemsControl 绑定 LogEntries，Color 属性绑定到 Foreground）-->
                     <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="12">
                         <StackPanel>

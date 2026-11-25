@@ -204,6 +204,22 @@ namespace TurntableStudio.ViewModels
         // ── 日志流 ───────────────────────────────────────────────────
         public ObservableCollection<LogEntry> LogEntries { get; } = new();
 
+        // ── 转盘手动控制属性 ────────────────────────────────────────────
+        private ushort _turntableSpeed = 230;
+        public ushort TurntableSpeed { get => _turntableSpeed; set => Set(ref _turntableSpeed, value); }
+
+        private ushort _turntablePulse = 24690;
+        public ushort TurntablePulse { get => _turntablePulse; set => Set(ref _turntablePulse, value); }
+
+        private ushort _turntableAccelDecel = 1000;
+        public ushort TurntableAccelDecel { get => _turntableAccelDecel; set => Set(ref _turntableAccelDecel, value); }
+
+        private double _targetAngle = 90.0;
+        public double TargetAngle { get => _targetAngle; set => Set(ref _targetAngle, value); }
+
+        private bool _isForwardDirection = true;
+        public bool IsForwardDirection { get => _isForwardDirection; set => Set(ref _isForwardDirection, value); }
+
         // ── 守卫 ─────────────────────────────────────────────────────
         public bool CanStartCapture => PlcConnected && CameraConnected && !IsCapturing;
 
@@ -213,6 +229,14 @@ namespace TurntableStudio.ViewModels
         public ICommand StartStopCommand     { get; }
         public ICommand ToggleLiveViewCommand{ get; }
         public ICommand BrowseFolderCommand  { get; }
+        public ICommand WriteParamsCommand   { get; }
+        public ICommand MoveForwardCommand   { get; }
+        public ICommand MoveReverseCommand   { get; }
+        public ICommand StartRotationCommand { get; }
+        public ICommand StopRotationCommand  { get; }
+        public ICommand GoHomeCommand        { get; }
+        public ICommand ManualForwardCommand { get; }
+        public ICommand ManualReverseCommand { get; }
 
         public MainViewModel()
         {
@@ -223,6 +247,14 @@ namespace TurntableStudio.ViewModels
             StartStopCommand      = new AsyncRelayCommand(StartStopAsync);
             ToggleLiveViewCommand = new AsyncRelayCommand(ToggleLiveViewAsync);
             BrowseFolderCommand   = new RelayCommand(BrowseFolder);
+            WriteParamsCommand    = new AsyncRelayCommand(WriteParamsAsync);
+            MoveForwardCommand    = new AsyncRelayCommand(MoveForwardAsync);
+            MoveReverseCommand    = new AsyncRelayCommand(MoveReverseAsync);
+            StartRotationCommand  = new AsyncRelayCommand(StartRotationAsync);
+            StopRotationCommand   = new RelayCommand(_ => SafeStop());
+            GoHomeCommand         = new AsyncRelayCommand(GoHomeAsync);
+            ManualForwardCommand  = new RelayCommand(_ => ManualJog(true));
+            ManualReverseCommand  = new RelayCommand(_ => ManualJog(false));
         }
 
         // ── 连接 PLC ─────────────────────────────────────────────────
@@ -415,6 +447,80 @@ namespace TurntableStudio.ViewModels
             };
             if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
                 SaveFolder = dialog.SelectedPath;
+        }
+
+        // ── 转盘手动控制方法 ─────────────────────────────────────────
+        private async Task WriteParamsAsync()
+        {
+            if (!PlcConnected) { AddLog("请先连接 PLC", LogLevel.Warning); return; }
+            try
+            {
+                await Task.Run(() => _turntable.Configure(TurntableSpeed, TurntablePulse, TurntableAccelDecel));
+                AddLog($"参数已写入：速度 {TurntableSpeed} / 脉冲 {TurntablePulse} / 加减速 {TurntableAccelDecel} ms", LogLevel.Success);
+            }
+            catch (Exception ex) { AddLog($"写入参数失败：{ex.Message}", LogLevel.Error); }
+        }
+
+        private async Task MoveForwardAsync()
+        {
+            if (!PlcConnected || IsCapturing) { AddLog("PLC 未连接或正在拍摄", LogLevel.Warning); return; }
+            try
+            {
+                AddLog($"正转到 {TargetAngle:F1}°…", LogLevel.Info);
+                await Task.Run(() => _turntable.MoveToWithDirectionAsync(TargetAngle, true));
+                AddLog($"已到达 {TargetAngle:F1}°", LogLevel.Success);
+            }
+            catch (Exception ex) { AddLog($"正转失败：{ex.Message}", LogLevel.Error); }
+        }
+
+        private async Task MoveReverseAsync()
+        {
+            if (!PlcConnected || IsCapturing) { AddLog("PLC 未连接或正在拍摄", LogLevel.Warning); return; }
+            try
+            {
+                AddLog($"反转到 {TargetAngle:F1}°…", LogLevel.Info);
+                await Task.Run(() => _turntable.MoveToWithDirectionAsync(TargetAngle, false));
+                AddLog($"已到达 {TargetAngle:F1}°", LogLevel.Success);
+            }
+            catch (Exception ex) { AddLog($"反转失败：{ex.Message}", LogLevel.Error); }
+        }
+
+        private async Task StartRotationAsync()
+        {
+            if (!PlcConnected) { AddLog("请先连接 PLC", LogLevel.Warning); return; }
+            try
+            {
+                await Task.Run(() => { _turntable.SetDirection(IsForwardDirection); _turntable.StartRotation(); });
+                AddLog($"转盘已启动（{(IsForwardDirection ? "正转" : "反转")}）", LogLevel.Success);
+            }
+            catch (Exception ex) { AddLog($"启动失败：{ex.Message}", LogLevel.Error); }
+        }
+
+        private void SafeStop()
+        {
+            if (!PlcConnected) return;
+            try { _turntable.StopRotation(); AddLog("转盘已停止", LogLevel.Info); }
+            catch (Exception ex) { AddLog($"停止失败：{ex.Message}", LogLevel.Error); }
+        }
+
+        private async Task GoHomeAsync()
+        {
+            if (!PlcConnected) { AddLog("请先连接 PLC", LogLevel.Warning); return; }
+            var result = MessageBox.Show("确认执行回零操作？", "回零确认", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (result != MessageBoxResult.Yes) return;
+            try
+            {
+                await Task.Run(() => _turntable.GoHome());
+                AddLog("回零指令已发送", LogLevel.Success);
+            }
+            catch (Exception ex) { AddLog($"回零失败：{ex.Message}", LogLevel.Error); }
+        }
+
+        private void ManualJog(bool forward)
+        {
+            if (!PlcConnected) return;
+            try { _turntable.SetDirection(forward); _turntable.StartRotation(); }
+            catch (Exception ex) { AddLog($"手动点动失败：{ex.Message}", LogLevel.Error); }
         }
 
         // ── 彩色日志追加 ─────────────────────────────────────────────

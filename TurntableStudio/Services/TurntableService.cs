@@ -97,6 +97,43 @@ namespace TurntableStudio.Services
             StatusChanged?.Invoke(this, $"PLC [{e.Target}] → {e.State}: {e.Message}");
         }
 
+        public void SetDirection(bool forward)
+        {
+            EnsureConnected();
+            _controller!.SetDirection(forward ? MovementDirection.Forward : MovementDirection.Reverse);
+        }
+
+        public void StartRotation()
+        {
+            EnsureConnected();
+            _controller!.Start();
+        }
+
+        public void StopRotation()
+        {
+            EnsureConnected();
+            _controller!.Stop();
+        }
+
+        public void GoHome()
+        {
+            EnsureConnected();
+            _controller!.GoHome();
+        }
+
+        public void Configure(ushort speed, ushort pulse, ushort accelDecel)
+        {
+            EnsureConnected();
+            _controller!.Configure(speed, pulse, accelDecel);
+        }
+
+        public async Task MoveToWithDirectionAsync(double targetDeg, bool forward)
+        {
+            EnsureConnected();
+            _controller!.SetDirection(forward ? MovementDirection.Forward : MovementDirection.Reverse);
+            await MoveToAsync(targetDeg);
+        }
+
         public void Dispose()
         {
             if (_disposed) return;
