@@ -363,28 +363,12 @@
                                 </StackPanel>
                             </Grid>
                             <Button Content="写入参数" Command="{Binding WriteParamsCommand}" Style="{StaticResource ActionBtn}" Margin="0,0,0,10"
-                                    IsEnabled="{Binding PlcConnected}" HorizontalAlignment="Left" Padding="16,6"/>
+                                    IsEnabled="{Binding CanUseManual}" HorizontalAlignment="Left" Padding="16,6"/>
 
                             <!-- 目标角度 + 方向 -->
-                            <Grid Margin="0,0,0,6">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                                    <TextBlock Text="目标角度 (°)" Style="{StaticResource Label}"/>
-                                    <TextBox Text="{Binding TargetAngle, UpdateSourceTrigger=LostFocus}" Style="{StaticResource Input}" IsEnabled="{Binding PlcConnected}"/>
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" VerticalAlignment="Bottom">
-                                    <RadioButton Content="正转" IsChecked="{Binding IsForwardDirection}" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,4" IsEnabled="{Binding PlcConnected}"/>
-                                    <RadioButton Content="反转" IsChecked="{Binding IsForwardDirection, Converter={x:Static vm:InvertBoolConverter.Instance}}" Foreground="{StaticResource TextPrimary}" IsEnabled="{Binding PlcConnected}"/>
-                                </StackPanel>
-                            </Grid>
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                <Button Content="▶ 正转到目标" Command="{Binding MoveForwardCommand}" Style="{StaticResource ActionBtn}"
-                                        IsEnabled="{Binding PlcConnected}" Margin="0,0,6,0" Padding="12,6"/>
-                                <Button Content="◀ 反转到目标" Command="{Binding MoveReverseCommand}" Style="{StaticResource ActionBtn}"
-                                        IsEnabled="{Binding PlcConnected}" Padding="12,6"/>
+                                <RadioButton Content="正转" IsChecked="{Binding IsForwardDirection}" Foreground="{StaticResource TextPrimary}" Margin="0,0,8,0" IsEnabled="{Binding CanUseManual}"/>
+                                <RadioButton Content="反转" IsChecked="{Binding IsForwardDirection, Converter={x:Static vm:InvertBoolConverter.Instance}}" Foreground="{StaticResource TextPrimary}" IsEnabled="{Binding CanUseManual}"/>
                             </StackPanel>
 
                             <!-- 手动点动 -->
@@ -393,21 +377,21 @@
                                 <Button Content="手动正转 ▶" Style="{StaticResource ActionBtn}" IsEnabled="{Binding PlcConnected}"
                                         Margin="0,0,6,0" Padding="12,6"
                                         PreviewMouseLeftButtonDown="ManualForwardDown"
-                                        PreviewMouseLeftButtonUp="ManualJogUp"/>
+                                        PreviewMouseLeftButtonUp="ManualJogUp" LostMouseCapture="ManualJogLostCapture"/>
                                 <Button Content="◀ 手动反转" Style="{StaticResource ActionBtn}" IsEnabled="{Binding PlcConnected}"
                                         Padding="12,6"
                                         PreviewMouseLeftButtonDown="ManualReverseDown"
-                                        PreviewMouseLeftButtonUp="ManualJogUp"/>
+                                        PreviewMouseLeftButtonUp="ManualJogUp" LostMouseCapture="ManualJogLostCapture"/>
                             </StackPanel>
 
                             <!-- 启停 + 回零 -->
                             <StackPanel Orientation="Horizontal">
                                 <Button Content="▶ 启动" Command="{Binding StartRotationCommand}" Style="{StaticResource ActionBtn}"
-                                        IsEnabled="{Binding PlcConnected}" Margin="0,0,6,0" Padding="12,6"/>
+                                        IsEnabled="{Binding CanUseManual}" Margin="0,0,6,0" Padding="12,6"/>
                                 <Button Content="■ 停止" Command="{Binding StopRotationCommand}" Style="{StaticResource ActionBtn}"
                                         IsEnabled="{Binding PlcConnected}" Margin="0,0,6,0" Padding="12,6"/>
                                 <Button Content="⌂ 零点确认" Command="{Binding GoHomeCommand}" Style="{StaticResource ActionBtn}"
-                                        IsEnabled="{Binding PlcConnected}" Padding="12,6"/>
+                                        IsEnabled="{Binding CanUseManual}" Padding="12,6"/>
                             </StackPanel>
                         </StackPanel>
                     </Border>

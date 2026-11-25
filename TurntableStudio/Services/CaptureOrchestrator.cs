@@ -1,5 +1,9 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -25,237 +29,234 @@ namespace TurntableStudio.Services
         public string FileName { get; set; } = string.Empty;
     }
 
-    /// <summary>
-    /// 步进精拍编排器：转盘 MoveTo → 停稳确认 → 拍照 → 文件落盘校验 → 下一角度
-    /// 每角度最多重试 3 次，完成后生成 manifest.json
-    /// </summary>
     public sealed class CaptureOrchestrator
     {
+        private const int MaxAttempts = 3;
+        private const long MinFileSizeBytes = 20480;
+        private const int FileWaitTimeoutMs = 30000;
+        private const int MotionStartTimeoutMs = 5000;
+        private const int MotionSettleTimeoutMs = 30000;
+        private const int SampleIntervalMs = 100;
+        private const int StableWindowMs = 500;
+        private const int MaxSampleGapMs = 300;
+        private const double TargetToleranceDeg = 0.5;
+
         private readonly TurntableService _turntable;
         private readonly CameraService _camera;
-
-        private const int MaxRetries = 3;
-        private const long MinFileSizeBytes = 20480; // 20 KB
-        private const int FileWaitIntervalMs = 200;
-        private const int FileWaitTimeoutMs = 30000; // 30s 等待相机传图
+        private readonly Func<bool>? _readPlcIdle;
 
         public event EventHandler<CaptureProgressEventArgs>? Progress;
         public event EventHandler<string>? Log;
 
-        public CaptureOrchestrator(TurntableService turntable, CameraService camera)
+        public CaptureOrchestrator(TurntableService turntable, CameraService camera, Func<bool>? readPlcIdle = null)
         {
             _turntable = turntable;
             _camera = camera;
+            _readPlcIdle = readPlcIdle;
         }
 
-        /// <summary>
-        /// 执行完整的一圈精拍任务
-        /// </summary>
-        /// <param name="shotCount">张数（36 或 72）</param>
-        /// <param name="saveFolder">保存目录（同时作为 SetSaveInfo 的 PC 端保存路径）</param>
-        /// <param name="filePrefix">文件名前缀（默认 Shot）</param>
-        /// <param name="ct">取消令牌</param>
         public async Task RunAsync(int shotCount, string saveFolder,
             string filePrefix = "Shot", CancellationToken ct = default)
         {
-            if (shotCount <= 0 || shotCount > 360)
+            if (shotCount != 36 && shotCount != 72)
                 throw new ArgumentOutOfRangeException(nameof(shotCount));
+            if (string.IsNullOrEmpty(filePrefix) || filePrefix.Any(ch => !char.IsLetterOrDigit(ch) && ch != '_' && ch != '-'))
+                throw new ArgumentException("文件名前缀只能含字母、数字、下划线和连字符。", nameof(filePrefix));
+            if (_readPlcIdle == null)
+                throw new InvalidOperationException("未配置已验收的 PLC 停稳反馈；禁止联动启动。");
 
-            Directory.CreateDirectory(saveFolder);
+            ct.ThrowIfCancellationRequested();
+            _camera.EnsureCaptureReady();
+            string runFolder = Path.Combine(Path.GetFullPath(saveFolder), $"run_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(runFolder);
+            Log?.Invoke(this, $"本轮保存目录：{runFolder}");
+            var records = new List<ShotRecord>(shotCount);
 
-            // Sony SDK SetSaveInfo 要求目录已存在且可写（CrError_File_ReadOnly=0x810c 表示目录不存在或无写权限）
-            // 写一个测试文件验证可写性，Sony SDK 不会自己创建目录
-            string testFile = Path.Combine(saveFolder, ".writetest");
             try
             {
-                File.WriteAllText(testFile, "ok");
-                File.Delete(testFile);
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidOperationException(
-                    $"保存目录不可写：{saveFolder}。请确认目录存在且有写入权限。({ex.Message})");
-            }
-
-            // 告诉相机把图片下载到 PC 端的 saveFolder
-            _camera.SetSaveInfo(saveFolder, filePrefix);
-            double stepAngle = 360.0 / shotCount;
-            // 读取当前角度作为起步基准，避免强制先回零
-            double startAngle = 0.0;
-            try { startAngle = Math.Round(_turntable.ReadAngle(), 1); }
-            catch { startAngle = 0.0; }
-            var records = new System.Collections.Generic.List<ShotRecord>(shotCount);
-
-            for (int i = 0; i < shotCount; i++)
-            {
-                ct.ThrowIfCancellationRequested();
-
-                double targetAngle = Math.Round(startAngle + i * stepAngle, 4) % 360.0;
-                string fileName = $"{filePrefix}_{i + 1:D3}_{targetAngle:000.##}deg.jpg";
-                string filePath = Path.Combine(saveFolder, fileName);
-
-                bool success = false;
-                for (int attempt = 1; attempt <= MaxRetries && !success; attempt++)
+                double stepAngle = 360.0 / shotCount;
+                double initialAngle = await WaitForRestAsync(null, ct);
+                double previousAngle = initialAngle;
+                for (int index = 1; index <= shotCount; index++)
                 {
                     ct.ThrowIfCancellationRequested();
+                    double targetAngle = (initialAngle + index * stepAngle) % 360.0;
+                    _turntable.SetDirection(true);
+                    ct.ThrowIfCancellationRequested();
+                    var motion = Stopwatch.StartNew();
+                    _turntable.StartRotation();
+                    await WaitForMotionAsync(previousAngle, motion, ct);
+                    double actualAngle = await WaitForRestAsync(targetAngle, ct);
+                    if (Math.Abs(SignedDelta(previousAngle, actualAngle) - stepAngle) > TargetToleranceDeg)
+                        throw new InvalidOperationException($"第 {index} 步实际步幅不符：{previousAngle:F1}° → {actualAngle:F1}°。");
 
-                    // 重试前等转盘完全静止（上次超时Stop后转盘还在滑行）
-                    if (attempt > 1)
+                    var record = await CaptureFrameAsync(runFolder, filePrefix, index, targetAngle, actualAngle, ct);
+                    records.Add(record);
+                    previousAngle = actualAngle;
+                    Progress?.Invoke(this, new CaptureProgressEventArgs
                     {
-                        await Task.Delay(2000, ct); // 给 Stop 后的惯性滑行留足时间
-                    }
-
-                    Log?.Invoke(this, $"[{i + 1}/{shotCount}] 步进第 {i + 1} 张（第{attempt}次）");
-
-                    try
-                    {
-                        // 1. 发 Start() 步进脉冲，等转盘动起来再停稳
-                        // 不调 MoveTo，不改目标寄存器，HMI 旋转角度设定始终 360°
-                        // 拍摄方向固定正转，避免 PLC 使用上次手动遗留的方向状态
-                        double angleBefore = _turntable.ReadAngle();
-                        _turntable.SetDirection(true); // 固定正转
-                        _turntable.StartRotation();
-
-                        // 等转盘开始移动（最多 5s）
-                        var moveStart = System.Diagnostics.Stopwatch.StartNew();
-                        while (moveStart.ElapsedMilliseconds < 5000)
-                        {
-                            await Task.Delay(200, ct);
-                            double a = _turntable.ReadAngle();
-                            double diff = Math.Abs(a - angleBefore);
-                            if (diff > 180) diff = 360 - diff;
-                            if (diff >= 0.5) break;
-                        }
-
-                        // 等转盘停稳（角度连续 500ms 变化 < 0.3°，最多 30s）
-                        double lastAngle = _turntable.ReadAngle();
-                        var stableStart = System.Diagnostics.Stopwatch.StartNew();
-                        var totalWait = System.Diagnostics.Stopwatch.StartNew();
-                        while (totalWait.ElapsedMilliseconds < 30000)
-                        {
-                            await Task.Delay(200, ct);
-                            double cur = _turntable.ReadAngle();
-                            double moved = Math.Abs(cur - lastAngle);
-                            if (moved > 180) moved = 360 - moved;
-                            if (moved >= 0.3)
-                            {
-                                lastAngle = cur;
-                                stableStart.Restart();
-                            }
-                            else if (stableStart.ElapsedMilliseconds >= 500)
-                            {
-                                break; // 停稳
-                            }
-                        }
-
-                        double actualAngle = _turntable.ReadAngle();
-                        var sw = System.Diagnostics.Stopwatch.StartNew();
-
-                        // 2. 配置保存路径并触发快门
-                        // 删除可能存在的旧文件（重试场景）
-                        if (File.Exists(filePath)) File.Delete(filePath);
-                        // 新 ABI：TakePicture(targetPath, timeoutMs)
-                        // bridge 负责等待下载并移动到 targetPath
-                        _camera.TakePicture(filePath, timeoutMs: FileWaitTimeoutMs);
-
-                        // 3. 轮询等待文件落盘（相机异步传图）
-                        bool fileReady = await WaitForFileAsync(filePath, ct);
-                        if (!fileReady)
-                        {
-                            Log?.Invoke(this, $"  ⚠ 文件未在 {FileWaitTimeoutMs}ms 内落盘，重试...");
-                            continue;
-                        }
-
-                        // 4. 文件完整性校验
-                        var fi = new FileInfo(filePath);
-                        if (fi.Length < MinFileSizeBytes)
-                        {
-                            Log?.Invoke(this, $"  ⚠ 文件过小 ({fi.Length} B < {MinFileSizeBytes} B)，重试...");
-                            continue;
-                        }
-
-                        sw.Stop();
-                        string sha256 = ComputeSha256(filePath);
-                        records.Add(new ShotRecord
-                        {
-                            Index = i + 1,
-                            TargetAngle = targetAngle,
-                            ActualAngle = Math.Round(actualAngle, 3),
-                            FileName = fileName,
-                            FileSizeBytes = fi.Length,
-                            Sha256 = sha256,
-                            ElapsedMs = sw.ElapsedMilliseconds,
-                        });
-
-                        success = true;
-                        Log?.Invoke(this, $"  ✓ {fileName} ({fi.Length / 1024}KB, {sw.ElapsedMilliseconds}ms)");
-                        Progress?.Invoke(this, new CaptureProgressEventArgs
-                        {
-                            Current = i + 1,
-                            Total = shotCount,
-                            FileName = fileName,
-                        });
-                    }
-                    catch (OperationCanceledException) { throw; }
-                    catch (Exception ex)
-                    {
-                        Log?.Invoke(this, $"  ✗ 第{attempt}次失败：{ex.Message}");
-                        if (attempt == MaxRetries)
-                            throw new InvalidOperationException(
-                                $"角度 {targetAngle:F1}° 拍摄失败（已重试 {MaxRetries} 次）", ex);
-                    }
+                        Current = index, Total = shotCount, FileName = record.FileName
+                    });
                 }
-            }
 
-            // 5. 生成 manifest.json
-            await WriteManifestAsync(saveFolder, shotCount, records);
-            Log?.Invoke(this, $"✅ 拍摄完成，共 {records.Count} 张，manifest.json 已生成");
+                if (records.Count != shotCount)
+                    throw new IOException($"本轮仅保存 {records.Count}/{shotCount} 张。");
+                await WriteManifestAsync(runFolder, shotCount, records, ct);
+                Log?.Invoke(this, $"拍摄完成，共 {records.Count} 张，manifest.json 已生成。");
+            }
+            catch (Exception failure)
+            {
+                try
+                {
+                    _turntable.StopRotation();
+                    await WaitForRestAsync(null, CancellationToken.None);
+                }
+                catch (Exception stopFailure)
+                {
+                    throw new AggregateException("联动已中断，但无法确认转盘停稳。", failure, stopFailure);
+                }
+                throw;
+            }
         }
 
-        private static async Task<bool> WaitForFileAsync(string filePath, CancellationToken ct)
+        private static double SignedDelta(double from, double to) => (to - from + 540.0) % 360.0 - 180.0;
+
+        private double ReadAngle()
         {
-            var deadline = DateTime.UtcNow.AddMilliseconds(FileWaitTimeoutMs);
-            while (DateTime.UtcNow < deadline)
+            double angle = _turntable.ReadAngle();
+            if (double.IsNaN(angle) || angle < 0 || angle >= 360)
+                throw new IOException($"无效的 PLC 角度读数：{angle}。");
+            return angle;
+        }
+
+        private async Task WaitForMotionAsync(double before, Stopwatch clock, CancellationToken ct)
+        {
+            while (clock.ElapsedMilliseconds < MotionStartTimeoutMs)
             {
                 ct.ThrowIfCancellationRequested();
-                if (File.Exists(filePath))
-                {
-                    // 额外等待 200ms 确认写入完成
-                    await Task.Delay(200, ct);
-                    return true;
-                }
-                await Task.Delay(FileWaitIntervalMs, ct);
+                double delta = SignedDelta(before, ReadAngle());
+                ct.ThrowIfCancellationRequested();
+                if (clock.ElapsedMilliseconds >= MotionStartTimeoutMs) break;
+                if (delta <= -1) throw new InvalidOperationException("转盘运动方向与正转不符。");
+                if (delta >= 1) return;
+                await Task.Delay(SampleIntervalMs, ct);
             }
-            return false;
+            throw new TimeoutException($"在 {MotionStartTimeoutMs}ms 内未确认正向步进。");
         }
 
-        private static string ComputeSha256(string filePath)
+        private async Task<double> WaitForRestAsync(double? targetAngle, CancellationToken ct)
         {
-            using var sha = SHA256.Create();
-            using var fs = File.OpenRead(filePath);
-            byte[] hash = sha.ComputeHash(fs);
-            return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
-        }
-
-        private static async Task WriteManifestAsync(string saveFolder, int shotCount,
-            System.Collections.Generic.List<ShotRecord> records)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("{");
-            sb.AppendLine($"  \"generated\": \"{DateTime.UtcNow:O}\",");
-            sb.AppendLine($"  \"shotCount\": {shotCount},");
-            sb.AppendLine($"  \"savedCount\": {records.Count},");
-            sb.AppendLine("  \"shots\": [");
-            for (int i = 0; i < records.Count; i++)
+            var clock = Stopwatch.StartNew();
+            long lastSample = 0;
+            long stableSince = -1;
+            double anchor = 0;
+            while (clock.ElapsedMilliseconds < MotionSettleTimeoutMs)
             {
-                var r = records[i];
-                string comma = i < records.Count - 1 ? "," : "";
-                sb.AppendLine($"    {{ \"index\": {r.Index}, \"targetAngle\": {r.TargetAngle}, \"actualAngle\": {r.ActualAngle}, \"fileName\": \"{r.FileName}\", \"fileSizeBytes\": {r.FileSizeBytes}, \"sha256\": \"{r.Sha256}\", \"elapsedMs\": {r.ElapsedMs} }}{comma}");
+                ct.ThrowIfCancellationRequested();
+                double angle = ReadAngle();
+                bool idle = _readPlcIdle!();
+                ct.ThrowIfCancellationRequested();
+                long now = clock.ElapsedMilliseconds;
+                if (now >= MotionSettleTimeoutMs) break;
+                if (!idle) stableSince = -1;
+                else if (stableSince < 0 || now - lastSample > MaxSampleGapMs || angle != anchor)
+                {
+                    stableSince = now;
+                    anchor = angle;
+                }
+                else if (now - stableSince >= StableWindowMs)
+                {
+                    if (targetAngle.HasValue && Math.Abs(SignedDelta(targetAngle.Value, angle)) > TargetToleranceDeg)
+                        throw new InvalidOperationException($"转盘已停但角度不符：目标 {targetAngle:F1}°，实测 {angle:F1}°。请检查 PLC 步进模式。");
+                    return angle;
+                }
+                lastSample = now;
+                await Task.Delay(SampleIntervalMs, ct);
             }
-            sb.AppendLine("  ]");
-            sb.AppendLine("}");
-            string path = Path.Combine(saveFolder, "manifest.json");
-            await Task.Run(() => File.WriteAllText(path, sb.ToString(), Encoding.UTF8));
+            throw new TimeoutException($"在 {MotionSettleTimeoutMs}ms 内未确认转盘停稳。");
+        }
+
+        private async Task<ShotRecord> CaptureFrameAsync(string runFolder, string filePrefix, int index,
+            double targetAngle, double actualAngle, CancellationToken ct)
+        {
+            string fileName = FormattableString.Invariant($"{filePrefix}_{index:D3}_{targetAngle:000.##}deg.jpg");
+            string finalPath = Path.Combine(runFolder, fileName);
+            for (int attempt = 1; attempt <= MaxAttempts; attempt++)
+            {
+                ct.ThrowIfCancellationRequested();
+                await WaitForRestAsync(actualAngle, ct);
+                string attemptFolder = Path.Combine(runFolder, $".attempt_{Guid.NewGuid():N}");
+                Directory.CreateDirectory(attemptFolder);
+                string attemptPath = Path.Combine(attemptFolder, "frame.jpg");
+                var elapsed = Stopwatch.StartNew();
+                long size;
+                string digest;
+                try
+                {
+                    _camera.TakePicture(attemptPath, FileWaitTimeoutMs, ct);
+                    (size, digest) = await CheckFileAsync(attemptPath, ct);
+                }
+                catch (IOException ex) when (attempt < MaxAttempts)
+                {
+                    Log?.Invoke(this, $"  ⚠ 第 {index} 张第 {attempt} 次文件失败，同一角度重拍：{ex.Message}");
+                    continue;
+                }
+                catch (IOException ex)
+                {
+                    throw new IOException($"第 {index} 张在 {MaxAttempts} 次尝试后仍没有合格文件。", ex);
+                }
+                ct.ThrowIfCancellationRequested();
+                File.Move(attemptPath, finalPath);
+                return new ShotRecord
+                {
+                    Index = index, TargetAngle = targetAngle, ActualAngle = actualAngle, FileName = fileName,
+                    FileSizeBytes = size, Sha256 = digest, ElapsedMs = elapsed.ElapsedMilliseconds
+                };
+            }
+            throw new InvalidOperationException("未生成拍摄记录。");
+        }
+
+        private static async Task<(long Size, string Digest)> CheckFileAsync(string path, CancellationToken ct)
+        {
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, true);
+            long size = file.Length;
+            if (size < MinFileSizeBytes)
+                throw new IOException($"文件只有 {size} B，小于 {MinFileSizeBytes} B。");
+            using var hash = SHA256.Create();
+            byte[] buffer = new byte[81920];
+            int read;
+            while ((read = await file.ReadAsync(buffer, 0, buffer.Length, ct)) > 0)
+                hash.TransformBlock(buffer, 0, read, buffer, 0);
+            hash.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+            return (size, BitConverter.ToString(hash.Hash!).Replace("-", "").ToLowerInvariant());
+        }
+
+        private static async Task WriteManifestAsync(string folder, int shotCount,
+            IReadOnlyList<ShotRecord> records, CancellationToken ct)
+        {
+            var text = new StringBuilder();
+            text.AppendLine("{");
+            text.AppendLine(FormattableString.Invariant($"  \"generated\": \"{DateTime.UtcNow:O}\","));
+            text.AppendLine(FormattableString.Invariant($"  \"shotCount\": {shotCount}, \"savedCount\": {records.Count},"));
+            text.AppendLine("  \"shots\": [");
+            for (int index = 0; index < records.Count; index++)
+            {
+                var record = records[index];
+                string comma = index + 1 < records.Count ? "," : "";
+                text.AppendLine(FormattableString.Invariant($"    {{\"index\": {record.Index}, \"targetAngle\": {record.TargetAngle}, \"actualAngle\": {record.ActualAngle}, \"fileName\": \"{record.FileName}\", \"fileSizeBytes\": {record.FileSizeBytes}, \"sha256\": \"{record.Sha256}\", \"elapsedMs\": {record.ElapsedMs}}}{comma}"));
+            }
+            text.AppendLine("  ]");
+            text.AppendLine("}");
+            ct.ThrowIfCancellationRequested();
+            string temporary = Path.Combine(folder, "manifest.json.tmp");
+            byte[] bytes = Encoding.UTF8.GetBytes(text.ToString());
+            using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, true))
+            {
+                await file.WriteAsync(bytes, 0, bytes.Length, ct);
+                await file.FlushAsync(ct);
+            }
+            ct.ThrowIfCancellationRequested();
+            File.Move(temporary, Path.Combine(folder, "manifest.json"));
         }
     }
 }

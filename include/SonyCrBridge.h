@@ -30,7 +30,9 @@ enum CrBridgeResult
     CrBridge_Error_OutOfMemory = -7,
     CrBridge_Error_Internal = -8,
     CrBridge_Error_Busy = -9,
-    CrBridge_Error_InvalidState = -10
+    CrBridge_Error_InvalidState = -10,
+    CrBridge_Error_Canceled = -11,
+    CrBridge_Error_InvalidFile = -12
 };
 
 /*
@@ -43,7 +45,8 @@ enum CrBridgeResult
  * CrBridge_Connect     : descriptor = JSON string from GetDeviceDescriptor.
  *                        interfaceType: 0=USB, 1=WiredLan, 2=WiFi.
  * CrBridge_GetLiveViewJpeg : data points into an internal bridge-owned buffer valid until
- *                        the next GetLiveViewJpeg call; do NOT free it.
+ *                        the next GetLiveViewJpeg call on the same thread or that thread's exit;
+ *                        copy on the calling thread and do NOT free it.
  *                        length receives the JPEG byte count (int32).
  * CrBridge_TakePicture : targetPath = full path where the captured JPEG should be saved.
  *                        timeoutMs  = max wait for file download (0 → 30 000 ms default).
@@ -79,6 +82,20 @@ SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(
 SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_TakePicture(
     const char* targetPath,
     int32_t     timeoutMs);
+
+typedef int32_t (SONY_CR_BRIDGE_CALL *CrBridgeShouldCancel)(void);
+
+/* The optional cancellation callback is synchronous and must not call into the bridge. */
+SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_TakePictureEx(
+    const char* targetPath,
+    int32_t timeoutMs,
+    CrBridgeShouldCancel shouldCancel);
+
+SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_GetDeviceCount(void);
+
+SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_StartLiveView(void);
+
+SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_StopLiveView(void);
 
 SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_SetSaveInfo(
     const char* path,

@@ -1,6 +1,8 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 
 namespace TurntableStudio.Services
 {
@@ -16,6 +18,8 @@ namespace TurntableStudio.Services
     {
         private const string BridgeDll = "SonyCrBridge.dll";
         private bool _disposed;
+        private bool _initialized;
+        private bool _captureRequiresReconnect;
 
         #region P/Invoke — exact ABI match to Huateng.Turntable.Sdk.Internal.SonyDevice
 
@@ -38,15 +42,19 @@ namespace TurntableStudio.Services
 
         /// <summary>
         /// data points into bridge-owned memory — do NOT call CrBridge_FreeBuffer.
-        /// Valid only until next GetLiveViewJpeg call.
+        /// Copy on the calling thread, before its next GetLiveViewJpeg call.
         /// </summary>
         [DllImport(BridgeDll, CallingConvention = CallingConvention.Cdecl)]
         private static extern int CrBridge_GetLiveViewJpeg(out IntPtr data, out int length);
 
-        [DllImport(BridgeDll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-        private static extern int CrBridge_TakePicture(
-            [MarshalAs(UnmanagedType.LPStr)] string targetPath,
-            int timeoutMs);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int ShouldCancel();
+
+        [DllImport(BridgeDll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        private static extern int CrBridge_TakePictureEx(
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string targetPath,
+            int timeoutMs,
+            ShouldCancel shouldCancel);
 
         [DllImport(BridgeDll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
         private static extern int CrBridge_SetSaveInfo(
@@ -73,6 +81,7 @@ namespace TurntableStudio.Services
             if (result < 0)
                 throw new InvalidOperationException(
                     $"CrBridge_Initialize 失败：{GetLastError()} (code {result})");
+            _initialized = true;
         }
 
         /// <summary>
@@ -117,14 +126,19 @@ namespace TurntableStudio.Services
                 throw new InvalidOperationException(
                     $"CrBridge_Connect 失败：{GetLastError()} (code {result})");
             IsConnected = true;
+            _captureRequiresReconnect = false;
         }
 
         /// <summary>断开相机连接并释放 SDK 资源</summary>
         public void Disconnect()
         {
-            if (!IsConnected) return;
-            CrBridge_Disconnect();
+            if (!_initialized) return;
+            int result = CrBridge_Disconnect();
             IsConnected = false;
+            if (result < 0)
+                throw new InvalidOperationException(
+                    $"CrBridge_Disconnect 失败：{GetLastError()} (code {result})");
+            _initialized = false;
         }
 
         /// <summary>
@@ -134,6 +148,8 @@ namespace TurntableStudio.Services
         public byte[]? GetLiveViewJpeg()
         {
             int result = CrBridge_GetLiveViewJpeg(out IntPtr data, out int length);
+            if (result == -3)
+                throw new InvalidOperationException("相机已断开，请重新连接。");
             if (result < 0 || data == IntPtr.Zero || length <= 0) return null;
             var bytes = new byte[length];
             Marshal.Copy(data, bytes, 0, length);
@@ -144,12 +160,24 @@ namespace TurntableStudio.Services
         /// 触发快门拍照，等待图片下载后移动到 targetPath。
         /// timeoutMs=0 → bridge 默认 30 秒超时。
         /// </summary>
-        public void TakePicture(string targetPath, int timeoutMs = 0)
+        public void TakePicture(string targetPath, int timeoutMs = 0, CancellationToken ct = default)
         {
-            int result = CrBridge_TakePicture(targetPath, timeoutMs);
+            ct.ThrowIfCancellationRequested();
+            EnsureCaptureReady();
+            int result = CrBridge_TakePictureEx(targetPath, timeoutMs, () => ct.IsCancellationRequested ? 1 : 0);
+            if (result == -12) throw new IOException($"下载文件校验失败：{GetLastError()}");
+            if (result < 0) _captureRequiresReconnect = true;
+            if (result == -11) throw new OperationCanceledException(ct);
+            if (result == -5) throw new TimeoutException(GetLastError());
             if (result < 0)
                 throw new InvalidOperationException(
-                    $"CrBridge_TakePicture 失败：{GetLastError()} (code {result})");
+                    $"CrBridge_TakePictureEx 失败：{GetLastError()} (code {result})");
+        }
+
+        public void EnsureCaptureReady()
+        {
+            if (!IsConnected || _captureRequiresReconnect)
+                throw new InvalidOperationException("相机未连接或上一张快门结果不确定，请重新连接相机后再拍摄。");
         }
 
         /// <summary>读取桥接层最近一次错误描述</summary>
@@ -177,8 +205,8 @@ namespace TurntableStudio.Services
         public void Dispose()
         {
             if (_disposed) return;
+            Disconnect();
             _disposed = true;
-            try { Disconnect(); } catch { }
         }
 
         private enum CrBridgeInternalError

@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using TurntableStudio.Services;
 
 namespace TurntableStudio.ViewModels
@@ -29,15 +30,21 @@ namespace TurntableStudio.ViewModels
 
     public enum LogLevel { Info, Success, Error, Warning }
 
-    public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
+    public sealed class MainViewModel : INotifyPropertyChanged
     {
         private readonly TurntableService _turntable = new();
         private readonly CameraService _camera = new();
-        private CaptureOrchestrator? _orchestrator;
+        private readonly Func<bool>? _readPlcIdle;
         private CancellationTokenSource? _captureCts;
-        private System.Timers.Timer? _liveViewTimer;
-        private System.Timers.Timer? _angleTimer;
-        private bool _disposed;
+        private DispatcherTimer? _liveViewTimer;
+        private DispatcherTimer? _angleTimer;
+        private Task _liveViewPoll = Task.CompletedTask;
+        private Task _anglePoll = Task.CompletedTask;
+        private Task _deviceTask = Task.CompletedTask;
+        private bool _deviceBusy;
+        private bool _closing;
+        private bool _manualMotionMayBeActive;
+        private bool _anglePollFailed;
 
         // ── 连接状态 ─────────────────────────────────────────────────
         private bool _plcConnected;
@@ -52,6 +59,7 @@ namespace TurntableStudio.ViewModels
                 OnPropertyChanged(nameof(ConnectPlcLabel));
                 OnPropertyChanged(nameof(Step1Done));
                 OnPropertyChanged(nameof(CanStartCapture));
+                OnPropertyChanged(nameof(CanUseManual));
                 RefreshStepStates();
             }
         }
@@ -214,14 +222,13 @@ namespace TurntableStudio.ViewModels
         private ushort _turntableAccelDecel = 1000;
         public ushort TurntableAccelDecel { get => _turntableAccelDecel; set => Set(ref _turntableAccelDecel, value); }
 
-        private double _targetAngle = 360.0;
-        public double TargetAngle { get => _targetAngle; set => Set(ref _targetAngle, value); }
-
         private bool _isForwardDirection = true;
         public bool IsForwardDirection { get => _isForwardDirection; set => Set(ref _isForwardDirection, value); }
 
         // ── 守卫 ─────────────────────────────────────────────────────
-        public bool CanStartCapture => PlcConnected && CameraConnected && !IsCapturing;
+        public bool CanStartCapture => !_closing && (IsCapturing ||
+            (!_deviceBusy && !_manualMotionMayBeActive && PlcConnected && CameraConnected));
+        public bool CanUseManual => !_closing && !_deviceBusy && !_manualMotionMayBeActive && PlcConnected;
 
         // ── 命令 ─────────────────────────────────────────────────────
         public ICommand ConnectPlcCommand    { get; }
@@ -230,31 +237,61 @@ namespace TurntableStudio.ViewModels
         public ICommand ToggleLiveViewCommand{ get; }
         public ICommand BrowseFolderCommand  { get; }
         public ICommand WriteParamsCommand   { get; }
-        public ICommand MoveForwardCommand   { get; }
-        public ICommand MoveReverseCommand   { get; }
         public ICommand StartRotationCommand { get; }
         public ICommand StopRotationCommand  { get; }
         public ICommand GoHomeCommand        { get; }
         public ICommand ManualForwardCommand { get; }
         public ICommand ManualReverseCommand { get; }
 
-        public MainViewModel()
+        public MainViewModel() : this(null) { }
+
+        public MainViewModel(Func<bool>? readPlcIdle)
         {
+            _readPlcIdle = readPlcIdle;
             _turntable.StatusChanged += (_, msg) => AddLog(msg, LogLevel.Info);
 
-            ConnectPlcCommand     = new AsyncRelayCommand(ConnectPlcAsync);
-            ConnectCameraCommand  = new AsyncRelayCommand(ConnectCameraAsync);
-            StartStopCommand      = new AsyncRelayCommand(StartStopAsync);
-            ToggleLiveViewCommand = new AsyncRelayCommand(ToggleLiveViewAsync);
+            ConnectPlcCommand     = new AsyncRelayCommand(() => RunDeviceAsync(ConnectPlcAsync));
+            ConnectCameraCommand  = new AsyncRelayCommand(() => RunDeviceAsync(ConnectCameraAsync));
+            StartStopCommand      = new RelayCommand(_ => StartOrCancelCapture());
+            ToggleLiveViewCommand = new AsyncRelayCommand(() => RunDeviceAsync(ToggleLiveViewAsync));
             BrowseFolderCommand   = new RelayCommand(BrowseFolder);
-            WriteParamsCommand    = new AsyncRelayCommand(WriteParamsAsync);
-            MoveForwardCommand    = new AsyncRelayCommand(MoveForwardAsync);
-            MoveReverseCommand    = new AsyncRelayCommand(MoveReverseAsync);
-            StartRotationCommand  = new AsyncRelayCommand(StartRotationAsync);
-            StopRotationCommand   = new RelayCommand(_ => SafeStop());
-            GoHomeCommand         = new AsyncRelayCommand(GoHomeAsync);
-            ManualForwardCommand  = new RelayCommand(_ => ManualJog(true));
-            ManualReverseCommand  = new RelayCommand(_ => ManualJog(false));
+            WriteParamsCommand    = new AsyncRelayCommand(() => RunDeviceAsync(WriteParamsAsync));
+            StartRotationCommand  = new AsyncRelayCommand(() => RunDeviceAsync(() => StartRotationAsync(IsForwardDirection)));
+            StopRotationCommand   = new AsyncRelayCommand(StopOrCancelAsync);
+            GoHomeCommand         = new AsyncRelayCommand(() => RunDeviceAsync(GoHomeAsync));
+            ManualForwardCommand  = new AsyncRelayCommand(() => RunDeviceAsync(() => StartRotationAsync(true)));
+            ManualReverseCommand  = new AsyncRelayCommand(() => RunDeviceAsync(() => StartRotationAsync(false)));
+        }
+
+        private void RefreshDeviceGuards()
+        {
+            OnPropertyChanged(nameof(CanStartCapture));
+            OnPropertyChanged(nameof(CanUseManual));
+        }
+
+        private Task RunDeviceAsync(Func<Task> action, bool stopping = false)
+        {
+            if (_closing || _deviceBusy || (_manualMotionMayBeActive && !stopping))
+                return Task.CompletedTask;
+            _deviceBusy = true;
+            RefreshDeviceGuards();
+            return _deviceTask = RunDeviceCoreAsync(action);
+        }
+
+        private async Task RunDeviceCoreAsync(Func<Task> action)
+        {
+            try
+            {
+                await Task.Yield();
+                await _anglePoll;
+                if (!_closing) await action();
+            }
+            catch (Exception ex) { AddLog(ex.ToString(), LogLevel.Error); }
+            finally
+            {
+                _deviceBusy = false;
+                RefreshDeviceGuards();
+            }
         }
 
         // ── 连接 PLC ─────────────────────────────────────────────────
@@ -262,8 +299,8 @@ namespace TurntableStudio.ViewModels
         {
             if (PlcConnected)
             {
-                StopAnglePolling();
-                _turntable.Disconnect();
+                await StopAnglePollingAsync();
+                await Task.Run(() => _turntable.Disconnect());
                 PlcConnected = false;
                 AddLog("PLC 已断开", LogLevel.Warning);
                 return;
@@ -284,8 +321,9 @@ namespace TurntableStudio.ViewModels
         {
             if (CameraConnected)
             {
-                _camera.Disconnect();
-                CameraConnected = false;
+                await StopLiveViewAsync();
+                try { await Task.Run(() => _camera.Disconnect()); }
+                finally { CameraConnected = false; }
                 AddLog("相机已断开", LogLevel.Warning);
                 return;
             }
@@ -296,6 +334,7 @@ namespace TurntableStudio.ViewModels
                 int count = 0;
                 await Task.Run(() =>
                 {
+                    _camera.Disconnect();
                     // 新 ABI：Initialize(sdkRoot) → GetDeviceDescriptor(index) → Connect(descriptor, interfaceType)
                     // sdkRoot 为 null 时 bridge 使用程序目录（Cr_Core.dll 与 SonyCrBridge.dll 同目录）
                     _camera.Initialize(null);
@@ -311,15 +350,39 @@ namespace TurntableStudio.ViewModels
         }
 
         // ── 开始 / 停止拍摄 ──────────────────────────────────────────
-        private async Task StartStopAsync()
+        private void StartOrCancelCapture()
         {
             if (IsCapturing)
             {
-                _captureCts?.Cancel();
-                AddLog("正在停止拍摄…", LogLevel.Warning);
+                CancelCapture();
                 return;
             }
+            if (CanStartCapture) _ = StartCaptureWithLifetimeAsync();
+        }
 
+        private async Task StartCaptureWithLifetimeAsync()
+        {
+            using var captureCts = new CancellationTokenSource();
+            _captureCts = captureCts;
+            IsCapturing = true;
+            try { await RunDeviceAsync(() => StartCaptureAsync(captureCts.Token)); }
+            finally
+            {
+                _captureCts = null;
+                IsCapturing = false;
+                RefreshStepStates();
+            }
+        }
+
+        private void CancelCapture()
+        {
+            if (_captureCts == null || _captureCts.IsCancellationRequested) return;
+            _captureCts.Cancel();
+            AddLog("正在停止拍摄…", LogLevel.Warning);
+        }
+
+        private async Task StartCaptureAsync(CancellationToken ct)
+        {
             if (!PlcConnected || !CameraConnected)
             {
                 AddLog("请先连接 PLC 与相机", LogLevel.Warning); return;
@@ -329,18 +392,16 @@ namespace TurntableStudio.ViewModels
                 AddLog("请先指定保存目录", LogLevel.Warning); return;
             }
 
-            _captureCts   = new CancellationTokenSource();
-            IsCapturing   = true;
             ProgressCurrent = 0;
             ProgressTotal   = SelectedShotCount;
 
-            _orchestrator = new CaptureOrchestrator(_turntable, _camera);
-            _orchestrator.Progress += (_, e) => UI(() =>
+            var orchestrator = new CaptureOrchestrator(_turntable, _camera, _readPlcIdle);
+            orchestrator.Progress += (_, e) => UI(() =>
             {
                 ProgressCurrent = e.Current;
                 ProgressTotal   = e.Total;
             });
-            _orchestrator.Log += (_, msg) =>
+            orchestrator.Log += (_, msg) =>
             {
                 var level = msg.StartsWith("  ✓") ? LogLevel.Success
                            : msg.StartsWith("  ✗") || msg.StartsWith("✗") ? LogLevel.Error
@@ -351,19 +412,21 @@ namespace TurntableStudio.ViewModels
 
             try
             {
-                AddLog($"开始精拍 {SelectedShotCount} 张 → {SaveFolder}", LogLevel.Info);
-                await _orchestrator.RunAsync(SelectedShotCount, SaveFolder, "Shot", _captureCts.Token);
+                await StopLiveViewAsync();
+                ct.ThrowIfCancellationRequested();
+                int count = SelectedShotCount;
+                string folder = SaveFolder;
+                AddLog($"开始精拍 {count} 张 → {folder}", LogLevel.Info);
+                await Task.Run(() => orchestrator.RunAsync(count, folder, "Shot", ct), ct);
                 AddLog($"拍摄完成，共 {ProgressCurrent} 张", LogLevel.Success);
             }
             catch (OperationCanceledException) { AddLog("拍摄已取消", LogLevel.Warning); }
-            catch (Exception ex)               { AddLog($"拍摄出错：{ex.Message}", LogLevel.Error); }
-            finally
+            catch (AggregateException ex)
             {
-                IsCapturing = false;
-                _captureCts?.Dispose();
-                _captureCts = null;
-                RefreshStepStates();
+                _manualMotionMayBeActive = true;
+                AddLog($"拍摄出错：{ex}", LogLevel.Error);
             }
+            catch (Exception ex) { AddLog($"拍摄出错：{ex.Message}", LogLevel.Error); }
         }
 
         // ── 实时取景 ─────────────────────────────────────────────────
@@ -373,68 +436,92 @@ namespace TurntableStudio.ViewModels
 
             if (LiveViewActive)
             {
-                _liveViewTimer?.Stop();
-                _liveViewTimer?.Dispose();
-                _liveViewTimer = null;
-                // 新 ABI 无 StopLiveView
-                LiveViewActive  = false;
-                LiveViewImage   = null;
+                await StopLiveViewAsync();
                 AddLog("实时取景已关闭", LogLevel.Info);
             }
             else
             {
-                // 新 ABI 无 StartLiveView，直接启动轮询
                 LiveViewActive  = true;
-                _liveViewTimer  = new System.Timers.Timer(100);
-                _liveViewTimer.Elapsed += (_, _) => RefreshLiveView();
+                _liveViewTimer  = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+                _liveViewTimer.Tick += (_, _) =>
+                {
+                    if (!_closing && !_deviceBusy && _liveViewPoll.IsCompleted)
+                        _liveViewPoll = RefreshLiveViewAsync();
+                };
                 _liveViewTimer.Start();
                 AddLog("实时取景已开启（10fps）", LogLevel.Success);
                 RefreshStepStates();
             }
         }
 
-        private void RefreshLiveView()
+        private async Task RefreshLiveViewAsync()
         {
-            byte[]? jpeg = _camera.GetLiveViewJpeg();
-            if (jpeg == null || jpeg.Length == 0) return;
-            UI(() =>
+            try
             {
-                try
-                {
-                    var bmp = new BitmapImage();
-                    bmp.BeginInit();
-                    bmp.StreamSource    = new MemoryStream(jpeg);
-                    bmp.CacheOption     = BitmapCacheOption.OnLoad;
-                    bmp.EndInit();
-                    bmp.Freeze();
-                    LiveViewImage = bmp;
-                }
-                catch { }
-            });
+                byte[]? jpeg = await Task.Run(() => _camera.GetLiveViewJpeg());
+                if (_closing || !LiveViewActive || jpeg == null || jpeg.Length == 0) return;
+                using var stream = new MemoryStream(jpeg);
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.StreamSource = stream;
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                LiveViewImage = bmp;
+            }
+            catch (InvalidOperationException ex)
+            {
+                _liveViewTimer?.Stop();
+                _liveViewTimer = null;
+                LiveViewActive = false;
+                LiveViewImage = null;
+                CameraConnected = false;
+                AddLog($"实时取景停止：{ex.Message}", LogLevel.Error);
+            }
+            catch (Exception ex) { AddLog($"取景帧无效：{ex.Message}", LogLevel.Warning); }
+        }
+
+        private async Task StopLiveViewAsync()
+        {
+            _liveViewTimer?.Stop();
+            _liveViewTimer = null;
+            LiveViewActive = false;
+            await _liveViewPoll;
+            LiveViewImage = null;
+            RefreshStepStates();
         }
 
         // ── 角度轮询 ─────────────────────────────────────────────────
         private void StartAnglePolling()
         {
-            _angleTimer = new System.Timers.Timer(300);
-            _angleTimer.Elapsed += (_, _) =>
+            _angleTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+            _angleTimer.Tick += (_, _) =>
             {
-                if (!PlcConnected) return;
-                try
-                {
-                    double angle = _turntable.ReadAngle();
-                    UI(() => CurrentAngle = angle);
-                }
-                catch { }
+                if (!_closing && !_deviceBusy && PlcConnected && _anglePoll.IsCompleted)
+                    _anglePoll = PollAngleAsync();
             };
             _angleTimer.Start();
         }
 
-        private void StopAnglePolling()
+        private async Task PollAngleAsync()
+        {
+            try
+            {
+                CurrentAngle = await Task.Run(() => _turntable.ReadAngle());
+                _anglePollFailed = false;
+            }
+            catch (Exception ex)
+            {
+                if (!_anglePollFailed) AddLog($"角度回读失败：{ex.Message}", LogLevel.Error);
+                _anglePollFailed = true;
+            }
+        }
+
+        private async Task StopAnglePollingAsync()
         {
             _angleTimer?.Stop();
-            _angleTimer?.Dispose();
             _angleTimer = null;
+            await _anglePoll;
         }
 
         // ── 浏览文件夹 ───────────────────────────────────────────────
@@ -461,66 +548,47 @@ namespace TurntableStudio.ViewModels
             catch (Exception ex) { AddLog($"写入参数失败：{ex.Message}", LogLevel.Error); }
         }
 
-        private async Task MoveForwardAsync()
-        {
-            if (!PlcConnected || IsCapturing) { AddLog("PLC 未连接或正在拍摄", LogLevel.Warning); return; }
-            try
-            {
-                AddLog($"正转到 {TargetAngle:F1}°…", LogLevel.Info);
-                await Task.Run(() => _turntable.MoveToWithDirectionAsync(TargetAngle, true));
-                AddLog($"已到达 {TargetAngle:F1}°", LogLevel.Success);
-            }
-            catch (Exception ex) { AddLog($"正转失败：{ex.Message}", LogLevel.Error); }
-        }
-
-        private async Task MoveReverseAsync()
-        {
-            if (!PlcConnected || IsCapturing) { AddLog("PLC 未连接或正在拍摄", LogLevel.Warning); return; }
-            try
-            {
-                AddLog($"反转到 {TargetAngle:F1}°…", LogLevel.Info);
-                await Task.Run(() => _turntable.MoveToWithDirectionAsync(TargetAngle, false));
-                AddLog($"已到达 {TargetAngle:F1}°", LogLevel.Success);
-            }
-            catch (Exception ex) { AddLog($"反转失败：{ex.Message}", LogLevel.Error); }
-        }
-
-        private async Task StartRotationAsync()
+        private async Task StartRotationAsync(bool forward)
         {
             if (!PlcConnected) { AddLog("请先连接 PLC", LogLevel.Warning); return; }
+            _manualMotionMayBeActive = true;
             try
             {
-                await Task.Run(() => { _turntable.SetDirection(IsForwardDirection); _turntable.StartRotation(); });
-                AddLog($"转盘已启动（{(IsForwardDirection ? "正转" : "反转")}）", LogLevel.Success);
+                await Task.Run(() => { _turntable.SetDirection(forward); _turntable.StartRotation(); });
+                AddLog($"已发送{(forward ? "正转" : "反转")}启动指令", LogLevel.Success);
             }
             catch (Exception ex) { AddLog($"启动失败：{ex.Message}", LogLevel.Error); }
         }
 
-        private void SafeStop()
+        private async Task StopOrCancelAsync()
         {
+            if (IsCapturing) { CancelCapture(); return; }
             if (!PlcConnected) return;
-            try { _turntable.StopRotation(); AddLog("转盘已停止", LogLevel.Info); }
-            catch (Exception ex) { AddLog($"停止失败：{ex.Message}", LogLevel.Error); }
+            if (_deviceBusy) await _deviceTask;
+            if (IsCapturing) { CancelCapture(); return; }
+            await RunDeviceAsync(StopManualAsync, stopping: true);
+        }
+
+        private async Task StopManualAsync()
+        {
+            _manualMotionMayBeActive = true;
+            await Task.Run(() => _turntable.StopRotation());
+            _manualMotionMayBeActive = false;
+            AddLog("已发送转盘停止指令。", LogLevel.Info);
         }
 
         private async Task GoHomeAsync()
         {
             if (!PlcConnected) { AddLog("请先连接 PLC", LogLevel.Warning); return; }
             var result = MessageBox.Show("确认执行回零操作？", "回零确认", MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (result != MessageBoxResult.Yes) return;
+            if (result != MessageBoxResult.Yes || _closing) return;
             try
             {
+                _manualMotionMayBeActive = true;
                 await Task.Run(() => _turntable.GoHome());
                 AddLog("回零指令已发送", LogLevel.Success);
             }
             catch (Exception ex) { AddLog($"回零失败：{ex.Message}", LogLevel.Error); }
-        }
-
-        private void ManualJog(bool forward)
-        {
-            if (!PlcConnected) return;
-            try { _turntable.SetDirection(forward); _turntable.StartRotation(); }
-            catch (Exception ex) { AddLog($"手动点动失败：{ex.Message}", LogLevel.Error); }
         }
 
         // ── 彩色日志追加 ─────────────────────────────────────────────
@@ -541,7 +609,12 @@ namespace TurntableStudio.ViewModels
         }
 
         private static void UI(Action action)
-            => Application.Current?.Dispatcher.Invoke(action);
+        {
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher == null || dispatcher.HasShutdownStarted) return;
+            if (dispatcher.CheckAccess()) action();
+            else dispatcher.BeginInvoke(DispatcherPriority.Normal, action);
+        }
 
         // ── INotifyPropertyChanged ───────────────────────────────────
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -554,15 +627,28 @@ namespace TurntableStudio.ViewModels
             OnPropertyChanged(name);
         }
 
-        public void Dispose()
+        public async Task ShutdownAsync()
         {
-            if (_disposed) return;
-            _disposed = true;
-            _liveViewTimer?.Dispose();
-            _angleTimer?.Dispose();
-            _captureCts?.Dispose();
-            _camera.Dispose();
-            _turntable.Dispose();
+            _closing = true;
+            RefreshDeviceGuards();
+            CancelCapture();
+            try
+            {
+                await _deviceTask;
+                await StopLiveViewAsync();
+                await StopAnglePollingAsync();
+                if (_manualMotionMayBeActive) await StopManualAsync();
+                await Task.Run(() => _camera.Dispose());
+                CameraConnected = false;
+                await Task.Run(() => _turntable.Dispose());
+                PlcConnected = false;
+            }
+            catch
+            {
+                _closing = false;
+                RefreshDeviceGuards();
+                throw;
+            }
         }
     }
 
