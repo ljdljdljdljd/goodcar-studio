@@ -80,6 +80,11 @@ SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_TakePicture(
     const char* targetPath,
     int32_t     timeoutMs);
 
+SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_SetSaveInfo(
+    const char* path,
+    const char* prefix,
+    int32_t     startNo);
+
 /* Read the last error message (UTF-8).  Two-pass: call with buffer=NULL to get required size. */
 SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_LastError(
     char*   utf8Message,

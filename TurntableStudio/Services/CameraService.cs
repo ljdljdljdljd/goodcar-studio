@@ -49,6 +49,12 @@ namespace TurntableStudio.Services
             int timeoutMs);
 
         [DllImport(BridgeDll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+        private static extern int CrBridge_SetSaveInfo(
+            [MarshalAs(UnmanagedType.LPStr)] string path,
+            [MarshalAs(UnmanagedType.LPStr)] string prefix,
+            int startNo);
+
+        [DllImport(BridgeDll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
         private static extern int CrBridge_LastError(
             [MarshalAs(UnmanagedType.LPStr)] StringBuilder? buffer,
             int capacity);
@@ -154,6 +160,18 @@ namespace TurntableStudio.Services
             var sb = new StringBuilder(required + 1);
             CrBridge_LastError(sb, sb.Capacity);
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// 设置 PC 端图片保存路径，必须在 Connect 之后、TakePicture 之前调用。
+        /// Sony SDK 默认只存相机卡，不设置则 OnCompleteDownload 永远不来。
+        /// </summary>
+        public void SetSaveInfo(string saveFolder, string prefix = "Shot")
+        {
+            int result = CrBridge_SetSaveInfo(saveFolder, prefix, 1);
+            if (result < 0)
+                throw new InvalidOperationException(
+                    $"CrBridge_SetSaveInfo 失败：{GetLastError()} (code {result})");
         }
 
         public void Dispose()

@@ -673,6 +673,48 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* le
     catch (...) { return CatchException("CrBridge_GetLiveViewJpeg"); }
 }
 
+// CrBridge_SetSaveInfo(string path, string prefix, int startNo)
+// Sets the PC-side save folder so Sony SDK downloads images after shutter.
+// Must be called after Connect and before TakePicture.
+int32_t SONY_CR_BRIDGE_CALL CrBridge_SetSaveInfo(const char* path, const char* prefix, int32_t startNo)
+{
+    auto& state = State();
+    std::lock_guard<std::mutex> apiLock(state.apiMutex);
+    if (!state.initialized)
+    {
+        state.SetError("Call CrBridge_Initialize before using the bridge.");
+        return CrBridge_Error_NotInitialized;
+    }
+    if (state.deviceHandle == 0 || !state.IsConnected())
+    {
+        state.SetError("No connected camera.");
+        return CrBridge_Error_NotConnected;
+    }
+    if (path == nullptr || path[0] == '\0')
+    {
+        state.SetError("path must not be empty.");
+        return CrBridge_Error_InvalidArgument;
+    }
+
+    try
+    {
+        // SCRSDK::SetSaveInfo takes non-const CrChar* (char*) for path and prefix
+        const CrError result = SCRSDK::SetSaveInfo(
+            state.deviceHandle,
+            const_cast<CrChar*>(path),
+            prefix != nullptr ? const_cast<CrChar*>(prefix) : const_cast<CrChar*>("Shot"),
+            startNo);
+        if (result != CrError_None)
+        {
+            state.SetSdkError("SetSaveInfo", result);
+            return CrBridge_Error_Sdk;
+        }
+        state.ClearError();
+        return CrBridge_Ok;
+    }
+    catch (...) { return CatchException("CrBridge_SetSaveInfo"); }
+}
+
 // CrBridge_TakePicture(string targetPath, int timeoutMs)
 // Triggers shutter and waits for the downloaded file to be renamed to targetPath.
 // targetPath: full destination path (UTF-8).  timeoutMs=0 → 30 s default.

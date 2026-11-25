@@ -52,7 +52,7 @@ namespace TurntableStudio.Services
         /// 执行完整的一圈精拍任务
         /// </summary>
         /// <param name="shotCount">张数（36 或 72）</param>
-        /// <param name="saveFolder">保存目录</param>
+        /// <param name="saveFolder">保存目录（同时作为 SetSaveInfo 的 PC 端保存路径）</param>
         /// <param name="filePrefix">文件名前缀（默认 Shot）</param>
         /// <param name="ct">取消令牌</param>
         public async Task RunAsync(int shotCount, string saveFolder,
@@ -62,14 +62,21 @@ namespace TurntableStudio.Services
                 throw new ArgumentOutOfRangeException(nameof(shotCount));
 
             Directory.CreateDirectory(saveFolder);
+
+            // 告诉相机把图片下载到 PC 端的 saveFolder
+            _camera.SetSaveInfo(saveFolder, filePrefix);
             double stepAngle = 360.0 / shotCount;
+            // 读取当前角度作为起步基准，避免强制先回零
+            double startAngle = 0.0;
+            try { startAngle = Math.Round(_turntable.ReadAngle(), 1); }
+            catch { startAngle = 0.0; }
             var records = new System.Collections.Generic.List<ShotRecord>(shotCount);
 
             for (int i = 0; i < shotCount; i++)
             {
                 ct.ThrowIfCancellationRequested();
 
-                double targetAngle = Math.Round(i * stepAngle, 4);
+                double targetAngle = Math.Round(startAngle + i * stepAngle, 4) % 360.0;
                 string fileName = $"{filePrefix}_{i + 1:D3}_{targetAngle:000.##}deg.jpg";
                 string filePath = Path.Combine(saveFolder, fileName);
 
