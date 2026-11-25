@@ -88,8 +88,8 @@ public:
     // Live view internal buffer (bridge-owned, returned by pointer to caller — no free needed)
     std::vector<uint8_t> liveViewBuffer;
 
-    // Download notification: last downloaded filename
-    std::string lastDownloadedFile;
+    // Download notification: last downloaded filename (wstring to handle wchar_t CrChar on Windows)
+    std::wstring lastDownloadedFile;
     bool downloadReady = false;
 
     CameraCallback callback;
@@ -320,16 +320,31 @@ std::string HexId(const ICrCameraObjectInfo* device)
     return output.str();
 }
 
+// Convert wchar_t* (CrChar* on Windows) to UTF-8 std::string
+static std::string WideToUtf8(const CrChar* s)
+{
+    if (!s || !s[0]) return {};
+#ifdef _WIN32
+    const int n = WideCharToMultiByte(CP_UTF8, 0, s, -1, nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string out(static_cast<size_t>(n - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, s, -1, out.data(), n, nullptr, nullptr);
+    return out;
+#else
+    return std::string(s);
+#endif
+}
+
 std::string DeviceDescriptor(const ICrCameraObjectInfo* device)
 {
     std::ostringstream d;
-    d << "{\"name\":\"" << JsonEscape(device->GetName())
-      << "\",\"model\":\"" << JsonEscape(device->GetModel())
-      << "\",\"connectionType\":\"" << JsonEscape(device->GetConnectionTypeName())
-      << "\",\"adapter\":\"" << JsonEscape(device->GetAdaptorName())
+    d << "{\"name\":\"" << JsonEscape(WideToUtf8(device->GetName()).c_str())
+      << "\",\"model\":\"" << JsonEscape(WideToUtf8(device->GetModel()).c_str())
+      << "\",\"connectionType\":\"" << JsonEscape(WideToUtf8(device->GetConnectionTypeName()).c_str())
+      << "\",\"adapter\":\"" << JsonEscape(WideToUtf8(device->GetAdaptorName()).c_str())
       << "\",\"idHex\":\"" << HexId(device)
-      << "\",\"ipAddress\":\"" << JsonEscape(device->GetIPAddressChar())
-      << "\",\"macAddress\":\"" << JsonEscape(device->GetMACAddressChar())
+      << "\",\"ipAddress\":\"" << JsonEscape(WideToUtf8(device->GetIPAddressChar()).c_str())
+      << "\",\"macAddress\":\"" << JsonEscape(WideToUtf8(device->GetMACAddressChar()).c_str())
       << "\"}";
     return d.str();
 }
@@ -800,6 +815,17 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_TakePicture(const char* targetPath, int32_t
         const auto deadline = std::chrono::steady_clock::now()
                             + std::chrono::milliseconds(waitMs);
         std::string downloadedPath;
+#ifdef _WIN32
+        // lastDownloadedFile is wstring (CrChar=wchar_t on Windows) — convert to UTF-8
+        auto wstrToUtf8 = [](const std::wstring& w) -> std::string {
+            if (w.empty()) return {};
+            const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
+            if (n <= 0) return {};
+            std::string out(static_cast<size_t>(n - 1), '\0');
+            WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, out.data(), n, nullptr, nullptr);
+            return out;
+        };
+#endif
         {
             std::unique_lock<std::mutex> eventLock(state.eventMutex);
             const bool ok = state.eventChanged.wait_until(eventLock, deadline,
@@ -809,7 +835,7 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_TakePicture(const char* targetPath, int32_t
                 state.SetError("Timed out waiting for image download after shutter.");
                 return CrBridge_Error_Timeout;
             }
-            downloadedPath = state.lastDownloadedFile;
+            downloadedPath = wstrToUtf8(state.lastDownloadedFile);
         }
 
         // Move/rename the downloaded file to targetPath if paths differ
