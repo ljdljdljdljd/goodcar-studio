@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -21,9 +20,9 @@ namespace TurntableStudio.Services
 
     public sealed class CaptureProgressEventArgs : EventArgs
     {
-        public int Current { get; init; }
-        public int Total { get; init; }
-        public string FileName { get; init; } = string.Empty;
+        public int Current { get; set; }
+        public int Total { get; set; }
+        public string FileName { get; set; } = string.Empty;
     }
 
     /// <summary>
@@ -175,17 +174,22 @@ namespace TurntableStudio.Services
         private static async Task WriteManifestAsync(string saveFolder, int shotCount,
             System.Collections.Generic.List<ShotRecord> records)
         {
-            var manifest = new
+            var sb = new StringBuilder();
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"generated\": \"{DateTime.UtcNow:O}\",");
+            sb.AppendLine($"  \"shotCount\": {shotCount},");
+            sb.AppendLine($"  \"savedCount\": {records.Count},");
+            sb.AppendLine("  \"shots\": [");
+            for (int i = 0; i < records.Count; i++)
             {
-                generated = DateTime.UtcNow.ToString("O"),
-                shotCount,
-                savedCount = records.Count,
-                shots = records,
-            };
-            string json = JsonSerializer.Serialize(manifest,
-                new JsonSerializerOptions { WriteIndented = true });
+                var r = records[i];
+                string comma = i < records.Count - 1 ? "," : "";
+                sb.AppendLine($"    {{ \"index\": {r.Index}, \"targetAngle\": {r.TargetAngle}, \"actualAngle\": {r.ActualAngle}, \"fileName\": \"{r.FileName}\", \"fileSizeBytes\": {r.FileSizeBytes}, \"sha256\": \"{r.Sha256}\", \"elapsedMs\": {r.ElapsedMs} }}{comma}");
+            }
+            sb.AppendLine("  ]");
+            sb.AppendLine("}");
             string path = Path.Combine(saveFolder, "manifest.json");
-            await File.WriteAllTextAsync(path, json, Encoding.UTF8);
+            await Task.Run(() => File.WriteAllText(path, sb.ToString(), Encoding.UTF8));
         }
     }
 }
