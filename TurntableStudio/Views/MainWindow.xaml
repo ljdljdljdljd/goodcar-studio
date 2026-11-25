@@ -373,7 +373,7 @@
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0" Margin="0,0,8,0">
                                     <TextBlock Text="目标角度 (°)" Style="{StaticResource Label}"/>
-                                    <TextBox Text="{Binding TargetAngle, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Input}" IsEnabled="{Binding PlcConnected}"/>
+                                    <TextBox Text="{Binding TargetAngle, UpdateSourceTrigger=LostFocus}" Style="{StaticResource Input}" IsEnabled="{Binding PlcConnected}"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" VerticalAlignment="Bottom">
                                     <RadioButton Content="正转" IsChecked="{Binding IsForwardDirection}" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,4" IsEnabled="{Binding PlcConnected}"/>

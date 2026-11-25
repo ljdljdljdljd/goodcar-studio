@@ -214,7 +214,7 @@ namespace TurntableStudio.ViewModels
         private ushort _turntableAccelDecel = 1000;
         public ushort TurntableAccelDecel { get => _turntableAccelDecel; set => Set(ref _turntableAccelDecel, value); }
 
-        private double _targetAngle = 90.0;
+        private double _targetAngle = 360.0;
         public double TargetAngle { get => _targetAngle; set => Set(ref _targetAngle, value); }
 
         private bool _isForwardDirection = true;
