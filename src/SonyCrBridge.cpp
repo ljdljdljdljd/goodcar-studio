@@ -712,8 +712,8 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_SetSaveInfo(const char* path, const char* p
         std::wstring wPrefix = toWide(prefix != nullptr ? prefix : "Shot");
         const CrError result = SCRSDK::SetSaveInfo(
             state.deviceHandle,
-            const_cast<CrChar*>(wPath.c_str()),
-            const_cast<CrChar*>(wPrefix.c_str()),
+            wPath.data(),
+            wPrefix.data(),
             startNo);
 #else
         const CrError result = SCRSDK::SetSaveInfo(
