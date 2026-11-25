@@ -33,7 +33,7 @@ class CameraCallback final : public IDeviceCallback
 public:
     explicit CameraCallback(BridgeState& state) : state_(state) {}
 
-    void OnConnected(DeviceConnectionVersion version) override;
+    void OnConnected(DeviceConnectionVersioin version) override;
     void OnDisconnected(CrInt32u error) override;
     void OnPropertyChanged() override;
     void OnLvPropertyChanged() override;
@@ -197,7 +197,7 @@ BridgeState& State()
     return state;
 }
 
-void CameraCallback::OnConnected(DeviceConnectionVersion)
+void CameraCallback::OnConnected(DeviceConnectionVersioin)
 {
     try { state_.NotifyConnected(); } catch (...) {}
 }
@@ -815,12 +815,8 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_StartLiveView(void)
 
     try
     {
-        const CrError result = SCRSDK::StartLiveView(state.deviceHandle);
-        if (result != CrError_None)
-        {
-            state.SetSdkError("StartLiveView", result);
-            return CrBridge_Error_Sdk;
-        }
+        // SDK v2.02 has no StartLiveView API; LiveView is active while connected.
+        // Allocate image block and mark active — polling via GetLiveViewImage.
         state.liveViewImage = std::make_unique<CrImageDataBlock>();
         state.liveViewBuffer.clear();
         state.liveView = true;
@@ -855,12 +851,7 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_StopLiveView(void)
 
     try
     {
-        const CrError result = SCRSDK::StopLiveView(state.deviceHandle);
-        if (result != CrError_None)
-        {
-            state.SetSdkError("StopLiveView", result);
-            return CrBridge_Error_Sdk;
-        }
+        // SDK v2.02 has no StopLiveView API; simply mark inactive and release buffer.
         state.liveView = false;
         state.liveViewImage.reset();
         state.liveViewBuffer.clear();
