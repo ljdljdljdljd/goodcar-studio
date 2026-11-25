@@ -527,7 +527,11 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Connect(const char* descriptorJson, int32_t
         static_cast<void>(interfaceType); // SDK selects interface from device descriptor
 
         CrDeviceHandle pendingHandle = 0;
-        const CrError result = SCRSDK::Connect(device, &state.callback, &pendingHandle);
+        // SCRSDK::Connect takes non-const ICrCameraObjectInfo*; use const_cast since
+        // GetCameraObjectInfo returns const but the SDK signature requires non-const.
+        SCRSDK::ICrCameraObjectInfo* deviceMutable = const_cast<SCRSDK::ICrCameraObjectInfo*>(
+            state.devices->GetCameraObjectInfo(static_cast<CrInt32u>(devIndex)));
+        const CrError result = SCRSDK::Connect(deviceMutable, &state.callback, &pendingHandle);
         if (result != CrError_None)
         {
             state.SetSdkError("SCRSDK::Connect", result);
