@@ -137,7 +137,10 @@ namespace TurntableStudio.Services
         public async Task MoveToWithDirectionAsync(double targetDeg, bool forward)
         {
             EnsureConnected();
-            await MoveToAsync(targetDeg, forward: forward, timeoutMs: 120000);
+            // 只设方向 + 启动，不写目标寄存器（1518=旋转角度设定=最大旋转角度，不能改）
+            _controller!.SetDirection(forward ? MovementDirection.Forward : MovementDirection.Reverse);
+            _controller!.Start();
+            await Task.CompletedTask;
         }
 
         public void Dispose()
