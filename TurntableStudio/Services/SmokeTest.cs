@@ -100,28 +100,30 @@ namespace TurntableStudio
 
             // ── 7. 转盘 PLC 连接 ──────────────────────────────────────
             Section($"7. 转盘 PLC 连接（{plcIp}）");
-            using var turntable = new TurntableService();
-            try
+            using (var turntable = new TurntableService())
             {
-                turntable.Connect(plcIp);
-                System.Threading.Thread.Sleep(1000);
-                if (turntable.IsConnected)
+                try
                 {
-                    Pass($"PLC 已连接：{plcIp}");
-                    Section("8. 读取当前角度");
-                    try
+                    turntable.Connect(plcIp);
+                    System.Threading.Thread.Sleep(1000);
+                    if (turntable.IsConnected)
                     {
-                        double angle = turntable.ReadAngle();
-                        Pass($"当前角度：{angle:F2}°");
+                        Pass($"PLC 已连接：{plcIp}");
+                        Section("8. 读取当前角度");
+                        try
+                        {
+                            double angle = turntable.ReadAngle();
+                            Pass($"当前角度：{angle:F2}°");
+                        }
+                        catch (Exception ex) { Fail($"ReadAngle 失败：{ex.Message}"); }
                     }
-                    catch (Exception ex) { Fail($"ReadAngle 失败：{ex.Message}"); }
+                    else
+                    {
+                        Fail($"PLC 连接状态未就绪：{plcIp}");
+                    }
                 }
-                else
-                {
-                    Fail($"PLC 连接状态未就绪：{plcIp}");
-                }
+                catch (Exception ex) { Fail($"TurntableService.Connect 失败：{ex.Message}"); }
             }
-            catch (Exception ex) { Fail($"TurntableService.Connect 失败：{ex.Message}"); }
 
         Report:
             camera?.Dispose();

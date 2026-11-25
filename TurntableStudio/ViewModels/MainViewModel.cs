@@ -20,10 +20,10 @@ namespace TurntableStudio.ViewModels
         public LogLevel Level { get; set; }
         public Brush Color => Level switch
         {
-            LogLevel.Success => new SolidColorBrush(Color.FromRgb(166, 227, 161)),  // #A6E3A1
-            LogLevel.Error   => new SolidColorBrush(Color.FromRgb(243, 139, 168)),  // #F38BA8
-            LogLevel.Warning => new SolidColorBrush(Color.FromRgb(249, 226, 175)),  // #F9E2AF
-            _                => new SolidColorBrush(Color.FromRgb(166, 173, 200)),  // #A6ADC8
+            LogLevel.Success => new SolidColorBrush(System.Windows.Media.Color.FromRgb(166, 227, 161)),  // #A6E3A1
+            LogLevel.Error   => new SolidColorBrush(System.Windows.Media.Color.FromRgb(243, 139, 168)),  // #F38BA8
+            LogLevel.Warning => new SolidColorBrush(System.Windows.Media.Color.FromRgb(249, 226, 175)),  // #F9E2AF
+            _                => new SolidColorBrush(System.Windows.Media.Color.FromRgb(166, 173, 200)),  // #A6ADC8
         };
     }
 
@@ -96,21 +96,21 @@ namespace TurntableStudio.ViewModels
         // ── 状态文本 ─────────────────────────────────────────────────
         public string PlcStatusText => PlcConnected ? "已连接" : "未连接";
         public Brush PlcStatusColor => PlcConnected
-            ? new SolidColorBrush(Color.FromRgb(166, 227, 161))
-            : new SolidColorBrush(Color.FromRgb(243, 139, 168));
+            ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(166, 227, 161))
+            : new SolidColorBrush(System.Windows.Media.Color.FromRgb(243, 139, 168));
 
         public string CameraStatusText => CameraConnected ? "已连接" : "未连接";
         public Brush CameraStatusColor => CameraConnected
-            ? new SolidColorBrush(Color.FromRgb(166, 227, 161))
-            : new SolidColorBrush(Color.FromRgb(243, 139, 168));
+            ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(166, 227, 161))
+            : new SolidColorBrush(System.Windows.Media.Color.FromRgb(243, 139, 168));
 
         public string ConnectPlcLabel    => PlcConnected ? "断开 PLC" : "连接 PLC";
         public string ConnectCameraLabel => CameraConnected ? "断开相机" : "连接相机";
         public string LiveViewLabel      => LiveViewActive ? "关闭取景" : "开启取景";
         public string StartStopLabel     => IsCapturing ? "停止拍摄" : "开始拍摄";
         public Brush  StartStopColor     => IsCapturing
-            ? new SolidColorBrush(Color.FromRgb(243, 139, 168))
-            : new SolidColorBrush(Color.FromRgb(166, 227, 161));
+            ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(243, 139, 168))
+            : new SolidColorBrush(System.Windows.Media.Color.FromRgb(166, 227, 161));
 
         // ── 配置 ─────────────────────────────────────────────────────
         private string _plcIp = "192.168.1.111";
@@ -176,9 +176,9 @@ namespace TurntableStudio.ViewModels
         public bool Step3Done => LiveViewActive;
         public bool Step4Active => PlcConnected && CameraConnected && !IsCapturing;
 
-        private Brush StepDoneBrush    => new SolidColorBrush(Color.FromRgb(166, 227, 161));
-        private Brush StepActiveBrush  => new SolidColorBrush(Color.FromRgb(203, 166, 247));
-        private Brush StepPendingBrush => new SolidColorBrush(Color.FromRgb(69, 71, 90));
+        private Brush StepDoneBrush    => new SolidColorBrush(System.Windows.Media.Color.FromRgb(166, 227, 161));
+        private Brush StepActiveBrush  => new SolidColorBrush(System.Windows.Media.Color.FromRgb(203, 166, 247));
+        private Brush StepPendingBrush => new SolidColorBrush(System.Windows.Media.Color.FromRgb(69, 71, 90));
 
         public Brush Step1Brush => Step1Done ? StepDoneBrush : StepActiveBrush;
         public Brush Step2Brush => Step1Done ? (Step2Done ? StepDoneBrush : StepActiveBrush) : StepPendingBrush;
