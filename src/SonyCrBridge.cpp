@@ -1023,7 +1023,9 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_TakePicture(uint32_t holdMs)
         }
         const CrError upResult = SCRSDK::SendCommand(
             state.deviceHandle, CrCommandId_Release, CrCommandParam_Up);
-        shutterGuard.disarm(); // 已手动发 Up，守卫解除
+        // FIX 3b: 手动 Up 已发，守卫解除；但只在 Down 成功时才解除
+        // （若 Down 失败，守卫本就未 armed，disarm 是 no-op，逻辑一致）
+        shutterGuard.disarm();
 
         if (downResult != CrError_None)
         {
