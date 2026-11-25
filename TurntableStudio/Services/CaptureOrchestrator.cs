@@ -91,7 +91,7 @@ namespace TurntableStudio.Services
                         // 1. 转盘移动并等待停稳
                         var sw = System.Diagnostics.Stopwatch.StartNew();
                         await _turntable.MoveToAsync(targetAngle, toleranceDeg: 0.5,
-                            stabilizeMs: 300, timeoutMs: 10000);
+                            stabilizeMs: 300, timeoutMs: 30000);
                         double actualAngle = _turntable.ReadAngle();
 
                         // 2. 配置保存路径并触发快门
