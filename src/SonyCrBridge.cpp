@@ -18,14 +18,21 @@
 #include <thread>
 #include <vector>
 
+// Windows-only: SetDllDirectory for loading Cr_Core.dll from sdkRoot
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace
 {
 using namespace SCRSDK;
 
 constexpr uint32_t kDefaultConnectTimeoutMs = 15000;
-constexpr uint32_t kDefaultLiveViewTimeoutMs = 1000;
+constexpr int32_t  kDefaultTakePictureTimeoutMs = 30000;
 constexpr uint32_t kDefaultShutterHoldMs = 100;
-constexpr uint32_t kMaximumShutterHoldMs = 10000;
 
 class BridgeState;
 
@@ -71,15 +78,20 @@ public:
     std::condition_variable eventChanged;
     std::mutex errorMutex;
     bool initialized = false;
-    bool liveView = false;
     bool connectPending = false;
     bool connected = false;
     bool disconnected = false;
     CrInt32u callbackError = 0;
     CrDeviceHandle deviceHandle = 0;
     ICrEnumCameraObjectInfo* devices = nullptr;
-    std::unique_ptr<CrImageDataBlock> liveViewImage;
-    std::vector<CrInt8u> liveViewBuffer;
+
+    // Live view internal buffer (bridge-owned, returned by pointer to caller — no free needed)
+    std::vector<uint8_t> liveViewBuffer;
+
+    // Download notification: last downloaded filename
+    std::string lastDownloadedFile;
+    bool downloadReady = false;
+
     CameraCallback callback;
     std::string lastError;
 
@@ -181,8 +193,15 @@ public:
 
     void NotifyDownload(CrChar* filename, CrInt32u type)
     {
-        static_cast<void>(filename);
         static_cast<void>(type);
+        {
+            std::lock_guard<std::mutex> lock(eventMutex);
+            if (filename != nullptr)
+            {
+                lastDownloadedFile = filename;
+            }
+            downloadReady = true;
+        }
         eventChanged.notify_all();
     }
 
@@ -245,105 +264,44 @@ void CameraCallback::OnCompleteOperation(CrInt32u, CrOperationResultData* result
     catch (...) {}
 }
 
-void CameraCallback::OnWarning(CrInt32u)
-{
-    try { state_.NotifyEvent(); } catch (...) {}
-}
+void CameraCallback::OnWarning(CrInt32u) { try { state_.NotifyEvent(); } catch (...) {} }
+void CameraCallback::OnPropertyChangedCodes(CrInt32u, CrInt32u*) { try { state_.NotifyEvent(); } catch (...) {} }
+void CameraCallback::OnLvPropertyChangedCodes(CrInt32u, CrInt32u*) { try { state_.NotifyEvent(); } catch (...) {} }
+void CameraCallback::OnNotifyContentsTransfer(CrInt32u, CrContentHandle, CrChar*) { try { state_.NotifyEvent(); } catch (...) {} }
+void CameraCallback::OnWarningExt(CrInt32u, CrInt32, CrInt32, CrInt32) { try { state_.NotifyEvent(); } catch (...) {} }
+void CameraCallback::OnNotifyFTPTransferResult(CrInt32u, CrInt32u, CrInt32u) { try { state_.NotifyEvent(); } catch (...) {} }
+void CameraCallback::OnNotifyRemoteTransferResult(CrInt32u, CrInt32u, CrChar*) { try { state_.NotifyEvent(); } catch (...) {} }
+void CameraCallback::OnNotifyRemoteTransferResult(CrInt32u, CrInt32u, CrInt8u*, CrInt64u) { try { state_.NotifyEvent(); } catch (...) {} }
+void CameraCallback::OnNotifyRemoteTransferContentsListChanged(CrInt32u, CrInt32u, CrInt32u) { try { state_.NotifyEvent(); } catch (...) {} }
+void CameraCallback::OnNotifyRemoteFirmwareUpdateResult(CrInt32u, const void*) { try { state_.NotifyEvent(); } catch (...) {} }
+void CameraCallback::OnReceivePlaybackTimeCode(CrInt32u) { try { state_.NotifyEvent(); } catch (...) {} }
+void CameraCallback::OnReceivePlaybackData(CrInt8u, CrInt32, CrInt8u*, CrInt64, CrInt64, CrInt32, CrInt32) { try { state_.NotifyEvent(); } catch (...) {} }
+void CameraCallback::OnNotifyMonitorUpdated(CrInt32u, CrInt32u) { try { state_.NotifyEvent(); } catch (...) {} }
+void CameraCallback::OnNotifyPostViewImage(CrChar*, CrInt32u) { try { state_.NotifyEvent(); } catch (...) {} }
 
-void CameraCallback::OnPropertyChangedCodes(CrInt32u, CrInt32u*)
-{
-    try { state_.NotifyEvent(); } catch (...) {}
-}
-
-void CameraCallback::OnLvPropertyChangedCodes(CrInt32u, CrInt32u*)
-{
-    try { state_.NotifyEvent(); } catch (...) {}
-}
-
-void CameraCallback::OnNotifyContentsTransfer(CrInt32u, CrContentHandle, CrChar*)
-{
-    try { state_.NotifyEvent(); } catch (...) {}
-}
-
-void CameraCallback::OnWarningExt(CrInt32u, CrInt32, CrInt32, CrInt32)
-{
-    try { state_.NotifyEvent(); } catch (...) {}
-}
-
-void CameraCallback::OnNotifyFTPTransferResult(CrInt32u, CrInt32u, CrInt32u)
-{
-    try { state_.NotifyEvent(); } catch (...) {}
-}
-
-void CameraCallback::OnNotifyRemoteTransferResult(CrInt32u, CrInt32u, CrChar*)
-{
-    try { state_.NotifyEvent(); } catch (...) {}
-}
-
-void CameraCallback::OnNotifyRemoteTransferResult(CrInt32u, CrInt32u, CrInt8u*, CrInt64u)
-{
-    try { state_.NotifyEvent(); } catch (...) {}
-}
-
-void CameraCallback::OnNotifyRemoteTransferContentsListChanged(CrInt32u, CrInt32u, CrInt32u)
-{
-    try { state_.NotifyEvent(); } catch (...) {}
-}
-
-void CameraCallback::OnNotifyRemoteFirmwareUpdateResult(CrInt32u, const void*)
-{
-    try { state_.NotifyEvent(); } catch (...) {}
-}
-
-void CameraCallback::OnReceivePlaybackTimeCode(CrInt32u)
-{
-    try { state_.NotifyEvent(); } catch (...) {}
-}
-
-void CameraCallback::OnReceivePlaybackData(CrInt8u, CrInt32, CrInt8u*, CrInt64, CrInt64, CrInt32, CrInt32)
-{
-    try { state_.NotifyEvent(); } catch (...) {}
-}
-
-void CameraCallback::OnNotifyMonitorUpdated(CrInt32u, CrInt32u)
-{
-    try { state_.NotifyEvent(); } catch (...) {}
-}
-
-void CameraCallback::OnNotifyPostViewImage(CrChar*, CrInt32u)
-{
-    try { state_.NotifyEvent(); } catch (...) {}
-}
+// ── helpers ──────────────────────────────────────────────────────────────────
 
 std::string JsonEscape(const char* value)
 {
-    if (value == nullptr)
-    {
-        return {};
-    }
-
+    if (value == nullptr) return {};
     std::ostringstream escaped;
-    for (const unsigned char character : std::string(value))
+    for (const unsigned char c : std::string(value))
     {
-        switch (character)
+        switch (c)
         {
-        case '"': escaped << "\\\""; break;
+        case '"':  escaped << "\\\""; break;
         case '\\': escaped << "\\\\"; break;
-        case '\b': escaped << "\\b"; break;
-        case '\f': escaped << "\\f"; break;
-        case '\n': escaped << "\\n"; break;
-        case '\r': escaped << "\\r"; break;
-        case '\t': escaped << "\\t"; break;
+        case '\b': escaped << "\\b";  break;
+        case '\f': escaped << "\\f";  break;
+        case '\n': escaped << "\\n";  break;
+        case '\r': escaped << "\\r";  break;
+        case '\t': escaped << "\\t";  break;
         default:
-            if (character < 0x20)
-            {
+            if (c < 0x20)
                 escaped << "\\u" << std::hex << std::setw(4) << std::setfill('0')
-                        << static_cast<unsigned int>(character);
-            }
+                        << static_cast<unsigned int>(c);
             else
-            {
-                escaped << static_cast<char>(character);
-            }
+                escaped << static_cast<char>(c);
             break;
         }
     }
@@ -352,69 +310,53 @@ std::string JsonEscape(const char* value)
 
 std::string HexId(const ICrCameraObjectInfo* device)
 {
-    if (device == nullptr || device->GetId() == nullptr)
-    {
-        return {};
-    }
-
+    if (device == nullptr || device->GetId() == nullptr) return {};
     const CrInt8u* id = device->GetId();
     const CrInt32u idSize = device->GetIdSize();
     std::ostringstream output;
     output << std::hex << std::setfill('0');
-    for (CrInt32u index = 0; index < idSize; ++index)
-    {
-        output << std::setw(2) << static_cast<unsigned int>(id[index]);
-    }
+    for (CrInt32u i = 0; i < idSize; ++i)
+        output << std::setw(2) << static_cast<unsigned int>(id[i]);
     return output.str();
 }
 
 std::string DeviceDescriptor(const ICrCameraObjectInfo* device)
 {
-    std::ostringstream descriptor;
-    descriptor << "{\"name\":\"" << JsonEscape(device->GetName())
-               << "\",\"model\":\"" << JsonEscape(device->GetModel())
-               << "\",\"connectionType\":\"" << JsonEscape(device->GetConnectionTypeName())
-               << "\",\"adapter\":\"" << JsonEscape(device->GetAdaptorName())
-               << "\",\"idHex\":\"" << HexId(device)
-               << "\",\"ipAddress\":\"" << JsonEscape(device->GetIPAddressChar())
-               << "\",\"macAddress\":\"" << JsonEscape(device->GetMACAddressChar())
-               << "\"}";
-    return descriptor.str();
+    std::ostringstream d;
+    d << "{\"name\":\"" << JsonEscape(device->GetName())
+      << "\",\"model\":\"" << JsonEscape(device->GetModel())
+      << "\",\"connectionType\":\"" << JsonEscape(device->GetConnectionTypeName())
+      << "\",\"adapter\":\"" << JsonEscape(device->GetAdaptorName())
+      << "\",\"idHex\":\"" << HexId(device)
+      << "\",\"ipAddress\":\"" << JsonEscape(device->GetIPAddressChar())
+      << "\",\"macAddress\":\"" << JsonEscape(device->GetMACAddressChar())
+      << "\"}";
+    return d.str();
 }
 
 int32_t CopyUtf8String(const std::string& value, char* buffer, int32_t capacity)
 {
     if (capacity < 0 || (buffer == nullptr && capacity != 0))
-    {
         return CrBridge_Error_InvalidArgument;
-    }
     if (value.size() >= static_cast<size_t>(INT32_MAX))
-    {
         return CrBridge_Error_Internal;
-    }
-
     const auto required = static_cast<int32_t>(value.size() + 1);
     if (buffer != nullptr && capacity >= required)
-    {
         std::memcpy(buffer, value.c_str(), static_cast<size_t>(required));
-    }
     return required;
 }
 
 int32_t CatchException(const char* operation)
 {
-    try
-    {
-        throw;
-    }
+    try { throw; }
     catch (const std::bad_alloc&)
     {
         State().SetError(std::string(operation) + " failed: out of memory.");
         return CrBridge_Error_OutOfMemory;
     }
-    catch (const std::exception& exception)
+    catch (const std::exception& ex)
     {
-        State().SetError(std::string(operation) + " failed: " + exception.what());
+        State().SetError(std::string(operation) + " failed: " + ex.what());
         return CrBridge_Error_Internal;
     }
     catch (...)
@@ -423,11 +365,48 @@ int32_t CatchException(const char* operation)
         return CrBridge_Error_Internal;
     }
 }
+
+// Find a camera by matching idHex in the descriptor JSON.
+// Returns the index into state.devices, or -1 if not found.
+int32_t FindDeviceByDescriptor(BridgeState& state, const char* descriptorJson)
+{
+    if (state.devices == nullptr) return -1;
+    if (descriptorJson == nullptr || descriptorJson[0] == '\0') return -1;
+
+    // Extract "idHex":"..." from the descriptor
+    std::string needle(descriptorJson);
+    const std::string key = "\"idHex\":\"";
+    size_t pos = needle.find(key);
+    std::string searchId;
+    if (pos != std::string::npos)
+    {
+        pos += key.size();
+        size_t end = needle.find('"', pos);
+        if (end != std::string::npos)
+            searchId = needle.substr(pos, end - pos);
+    }
+
+    for (CrInt32u i = 0; i < state.devices->GetCount(); ++i)
+    {
+        const auto* dev = state.devices->GetCameraObjectInfo(i);
+        if (dev == nullptr) continue;
+        if (!searchId.empty() && HexId(dev) == searchId) return static_cast<int32_t>(i);
+    }
+
+    // Fallback: first device (single-camera setup)
+    return state.devices->GetCount() > 0 ? 0 : -1;
 }
+
+} // anonymous namespace
+
+// ── exported ABI (matches Huateng.Turntable.Sdk.Internal.SonyDevice) ─────────
 
 extern "C"
 {
-int32_t SONY_CR_BRIDGE_CALL CrBridge_Initialize(void)
+
+// CrBridge_Initialize(string sdkRoot)
+// sdkRoot: directory containing Cr_Core.dll.  NULL/empty → use current working directory.
+int32_t SONY_CR_BRIDGE_CALL CrBridge_Initialize(const char* sdkRoot)
 {
     auto& state = State();
     std::lock_guard<std::mutex> apiLock(state.apiMutex);
@@ -439,6 +418,21 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Initialize(void)
 
     try
     {
+#ifdef _WIN32
+        // Point the DLL loader at sdkRoot so it can find Cr_Core.dll and CrAdapter.
+        if (sdkRoot != nullptr && sdkRoot[0] != '\0')
+        {
+            // Convert UTF-8 to wide string for SetDllDirectoryW
+            const int wLen = MultiByteToWideChar(CP_UTF8, 0, sdkRoot, -1, nullptr, 0);
+            if (wLen > 0)
+            {
+                std::vector<wchar_t> wPath(static_cast<size_t>(wLen));
+                MultiByteToWideChar(CP_UTF8, 0, sdkRoot, -1, wPath.data(), wLen);
+                SetDllDirectoryW(wPath.data());
+            }
+        }
+#endif
+
         if (!SCRSDK::Init(0))
         {
             state.SetError("SCRSDK::Init(0) failed.");
@@ -454,7 +448,9 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Initialize(void)
     }
 }
 
-int32_t SONY_CR_BRIDGE_CALL CrBridge_GetDeviceCount(void)
+// CrBridge_GetDeviceDescriptor(int index, char* buffer, int bufferSize)
+// Two-pass: call with buffer=NULL,bufferSize=0 to get required size; then call again with buffer.
+int32_t SONY_CR_BRIDGE_CALL CrBridge_GetDeviceDescriptor(int32_t index, char* buffer, int32_t bufferSize)
 {
     auto& state = State();
     std::lock_guard<std::mutex> apiLock(state.apiMutex);
@@ -467,62 +463,28 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_GetDeviceCount(void)
     try
     {
         if (!state.RefreshDevices())
-        {
             return CrBridge_Error_Sdk;
-        }
-        state.ClearError();
-        return state.devices == nullptr ? 0 : static_cast<int32_t>(state.devices->GetCount());
-    }
-    catch (...)
-    {
-        return CatchException("CrBridge_GetDeviceCount");
-    }
-}
-
-int32_t SONY_CR_BRIDGE_CALL CrBridge_GetDeviceDescriptor(int32_t index, char* utf8Json, int32_t capacity)
-{
-    auto& state = State();
-    std::lock_guard<std::mutex> apiLock(state.apiMutex);
-    if (!state.initialized)
-    {
-        state.SetError("Call CrBridge_Initialize before using the bridge.");
-        return CrBridge_Error_NotInitialized;
-    }
-    if (index < 0 || capacity < 0 || (utf8Json == nullptr && capacity != 0))
-    {
-        state.SetError("Invalid device index or output buffer.");
-        return CrBridge_Error_InvalidArgument;
-    }
-
-    try
-    {
-        if (!state.RefreshDevices())
-        {
-            return CrBridge_Error_Sdk;
-        }
         if (state.devices == nullptr || static_cast<CrInt32u>(index) >= state.devices->GetCount())
         {
             state.SetError("Device index is out of range.");
             return CrBridge_Error_InvalidIndex;
         }
-
         const auto* device = state.devices->GetCameraObjectInfo(static_cast<CrInt32u>(index));
         if (device == nullptr)
         {
             state.SetError("Sony SDK returned a null device descriptor.");
             return CrBridge_Error_Sdk;
         }
-        const int32_t required = CopyUtf8String(DeviceDescriptor(device), utf8Json, capacity);
+        const int32_t required = CopyUtf8String(DeviceDescriptor(device), buffer, bufferSize);
         state.ClearError();
         return required;
     }
-    catch (...)
-    {
-        return CatchException("CrBridge_GetDeviceDescriptor");
-    }
+    catch (...) { return CatchException("CrBridge_GetDeviceDescriptor"); }
 }
 
-int32_t SONY_CR_BRIDGE_CALL CrBridge_Connect(int32_t index, uint32_t timeoutMs)
+// CrBridge_Connect(string descriptorJson, int interfaceType)
+// descriptorJson: JSON from GetDeviceDescriptor.  interfaceType: 0=USB, 1=WiredLan, 2=WiFi.
+int32_t SONY_CR_BRIDGE_CALL CrBridge_Connect(const char* descriptorJson, int32_t interfaceType)
 {
     auto& state = State();
     std::lock_guard<std::mutex> apiLock(state.apiMutex);
@@ -531,11 +493,7 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Connect(int32_t index, uint32_t timeoutMs)
         state.SetError("Call CrBridge_Initialize before using the bridge.");
         return CrBridge_Error_NotInitialized;
     }
-    if (index < 0)
-    {
-        state.SetError("Device index must not be negative.");
-        return CrBridge_Error_InvalidArgument;
-    }
+
     bool connectionBusy = false;
     {
         std::lock_guard<std::mutex> eventLock(state.eventMutex);
@@ -550,422 +508,108 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Connect(int32_t index, uint32_t timeoutMs)
     try
     {
         if (!state.RefreshDevices())
-        {
             return CrBridge_Error_Sdk;
-        }
-        if (state.devices == nullptr || static_cast<CrInt32u>(index) >= state.devices->GetCount())
+
+        const int32_t devIndex = FindDeviceByDescriptor(state, descriptorJson);
+        if (devIndex < 0)
         {
-            state.SetError("Device index is out of range.");
+            state.SetError("No matching camera found for the given descriptor.");
             return CrBridge_Error_InvalidIndex;
         }
 
-        const ICrCameraObjectInfo* device = state.devices->GetCameraObjectInfo(static_cast<CrInt32u>(index));
+        const auto* device = state.devices->GetCameraObjectInfo(static_cast<CrInt32u>(devIndex));
         if (device == nullptr)
         {
-            state.SetError("Sony SDK returned a null device descriptor.");
+            state.SetError("Sony SDK returned a null device object.");
             return CrBridge_Error_Sdk;
         }
 
-        CrDeviceHandle newHandle = 0;
+        static_cast<void>(interfaceType); // SDK selects interface from device descriptor
+
+        CrDeviceHandle pendingHandle = 0;
+        const CrError result = SCRSDK::Connect(device, &state.callback, &pendingHandle);
+        if (result != CrError_None)
+        {
+            state.SetSdkError("SCRSDK::Connect", result);
+            return CrBridge_Error_Sdk;
+        }
+
         {
             std::lock_guard<std::mutex> eventLock(state.eventMutex);
             state.connectPending = true;
-            state.connected = false;
-            state.disconnected = false;
-            state.callbackError = 0;
-            state.deviceHandle = 0;
+            state.deviceHandle = pendingHandle;
         }
 
-        const CrError result = SCRSDK::Connect(
-            const_cast<ICrCameraObjectInfo*>(device),
-            &state.callback,
-            &newHandle,
-            CrSdkControlMode_Remote,
-            CrReconnecting_ON);
+        // Wait for OnConnected callback
+        const auto deadline = std::chrono::steady_clock::now()
+                            + std::chrono::milliseconds(kDefaultConnectTimeoutMs);
         {
-            std::lock_guard<std::mutex> eventLock(state.eventMutex);
-            state.deviceHandle = newHandle;
-        }
-        if (result != CrError_None)
-        {
-            {
-                std::lock_guard<std::mutex> eventLock(state.eventMutex);
-                state.connectPending = false;
-            }
-            state.SetSdkError("Connect", result);
-            return CrBridge_Error_Sdk;
-        }
-
-        const auto waitMs = timeoutMs == 0 ? kDefaultConnectTimeoutMs : timeoutMs;
-        std::unique_lock<std::mutex> eventLock(state.eventMutex);
-        const bool eventReceived = state.eventChanged.wait_for(
-            eventLock,
-            std::chrono::milliseconds(waitMs),
-            [&state] { return state.connected || state.disconnected || state.callbackError != 0; });
-        if (!eventReceived)
-        {
-            // FIX 1: 超时必须清除 connectPending，防止 Disconnect 二次死锁
-            state.connectPending = false;
-            eventLock.unlock();
-            // 尽力向 SDK 发起取消连接，忽略返回值（句柄可能尚未就绪）
-            const CrDeviceHandle pendingHandle = state.deviceHandle;
-            if (pendingHandle != 0)
+            std::unique_lock<std::mutex> eventLock(state.eventMutex);
+            const bool ok = state.eventChanged.wait_until(eventLock, deadline, [&state] {
+                return state.connected || state.disconnected || state.callbackError != 0;
+            });
+            if (!ok || !state.connected)
             {
                 SCRSDK::Disconnect(pendingHandle);
                 SCRSDK::ReleaseDevice(pendingHandle);
-                std::lock_guard<std::mutex> hLock(state.eventMutex);
                 state.deviceHandle = 0;
+                state.connectPending = false;
+                state.connected = false;
+                if (state.lastError.empty())
+                    state.SetError("Timed out waiting for camera connection.");
+                return CrBridge_Error_Timeout;
             }
-            state.SetError("Timed out waiting for Sony SDK OnConnected callback.");
-            return CrBridge_Error_Timeout;
         }
-        if (!state.connected)
-        {
-            const CrInt32u callbackError = state.callbackError;
-            eventLock.unlock();
-            std::ostringstream message;
-            message << "Sony SDK connection callback reported error 0x" << std::hex << callbackError << '.';
-            state.SetError(message.str());
-            return CrBridge_Error_Sdk;
-        }
-        eventLock.unlock();
+
         state.ClearError();
         return CrBridge_Ok;
     }
-    catch (...)
-    {
-        return CatchException("CrBridge_Connect");
-    }
+    catch (...) { return CatchException("CrBridge_Connect"); }
 }
 
+// CrBridge_Disconnect()
 int32_t SONY_CR_BRIDGE_CALL CrBridge_Disconnect(void)
 {
     auto& state = State();
     std::lock_guard<std::mutex> apiLock(state.apiMutex);
-    if (!state.initialized)
+
+    CrDeviceHandle handle = 0;
     {
-        state.SetError("Call CrBridge_Initialize before using the bridge.");
-        return CrBridge_Error_NotInitialized;
-    }
-    {
-        std::unique_lock<std::mutex> eventLock(state.eventMutex);
-        if (state.connectPending && !state.eventChanged.wait_for(
-                eventLock,
-                std::chrono::milliseconds(kDefaultConnectTimeoutMs),
-                [&state] { return !state.connectPending; }))
-        {
-            state.SetError("Timed out waiting for the pending Sony SDK connection callback.");
-            return CrBridge_Error_Timeout;
-        }
+        std::lock_guard<std::mutex> eventLock(state.eventMutex);
+        handle = state.deviceHandle;
+        state.deviceHandle = 0;
+        state.connected = false;
+        state.connectPending = false;
     }
 
-    if (state.deviceHandle == 0)
+    if (handle != 0)
     {
-        {
-            std::lock_guard<std::mutex> eventLock(state.eventMutex);
-            if (state.connected)
-            {
-                state.SetError("SDK reported a connected camera without a valid device handle.");
-                return CrBridge_Error_Internal;
-            }
-        }
-        try
-        {
-            if (state.devices != nullptr)
-            {
-                state.devices->Release();
-                state.devices = nullptr;
-            }
-            if (state.initialized)
-            {
-                if (!SCRSDK::Release())
-                {
-                    state.SetError("SCRSDK::Release() failed.");
-                    return CrBridge_Error_Sdk;
-                }
-                state.initialized = false;
-            }
-        }
-        catch (...)
-        {
-            return CatchException("CrBridge_Disconnect");
-        }
-        state.ClearError();
-        return CrBridge_Ok;
+        SCRSDK::Disconnect(handle);
+        SCRSDK::ReleaseDevice(handle);
     }
 
-    try
+    if (state.initialized)
     {
-        if (state.liveView)
-        {
-            // SDK v2.02 has no StopLiveView API; just mark inactive.
-            state.liveView = false;
-        }
-
-        bool alreadyDisconnected = false;
-        {
-            std::lock_guard<std::mutex> eventLock(state.eventMutex);
-            alreadyDisconnected = state.disconnected;
-            if (!alreadyDisconnected)
-            {
-                state.disconnected = false;
-            }
-        }
-        if (!alreadyDisconnected)
-        {
-            const CrError result = SCRSDK::Disconnect(state.deviceHandle);
-            if (result != CrError_None)
-            {
-                std::lock_guard<std::mutex> eventLock(state.eventMutex);
-                if (!state.disconnected)
-                {
-                    state.SetSdkError("Disconnect", result);
-                    return CrBridge_Error_Sdk;
-                }
-            }
-        }
-
-        // FIX 2: 等待断连回调，超时后不提前 return，继续走幂等清理
-        bool disconnectTimedOut = false;
-        {
-            std::unique_lock<std::mutex> eventLock(state.eventMutex);
-            if (!state.eventChanged.wait_for(
-                    eventLock,
-                    std::chrono::milliseconds(kDefaultConnectTimeoutMs),
-                    [&state] { return state.disconnected; }))
-            {
-                disconnectTimedOut = true;
-                state.SetError("Timed out waiting for Sony SDK OnDisconnected callback.");
-                // 不 return — 继续执行幂等资源释放
-            }
-        }
-
-        // 幂等 Teardown：无论超时与否，以下清理必须 100% 执行
-        const CrDeviceHandle handle = state.deviceHandle;
-        CrError releaseResult = CrError_None;
-        if (handle != 0)
-        {
-            releaseResult = SCRSDK::ReleaseDevice(handle);
-        }
-        {
-            std::lock_guard<std::mutex> eventLock(state.eventMutex);
-            state.deviceHandle = 0;
-            state.connected = false;
-            state.disconnected = false;
-        }
-        state.liveView = false;
-        state.liveViewImage.reset();
-        state.liveViewBuffer.clear();
-
-        if (state.devices != nullptr)
-        {
-            state.devices->Release();
-            state.devices = nullptr;
-        }
-
-        const bool releaseSucceeded = SCRSDK::Release();
         state.initialized = false;
-
-        // 超时优先上报，其次 SDK release 错误
-        if (disconnectTimedOut)
-        {
-            return CrBridge_Error_Timeout;
-        }
-        if (releaseResult != CrError_None)
-        {
-            state.SetSdkError("ReleaseDevice", releaseResult);
-            return CrBridge_Error_Sdk;
-        }
-        if (!releaseSucceeded)
+        if (!SCRSDK::Release())
         {
             state.SetError("SCRSDK::Release() failed.");
             return CrBridge_Error_Sdk;
         }
-        state.ClearError();
-        return CrBridge_Ok;
     }
-    catch (...)
-    {
-        return CatchException("CrBridge_Disconnect");
-    }
+
+    state.ClearError();
+    return CrBridge_Ok;
 }
 
-int32_t SONY_CR_BRIDGE_CALL CrBridge_StartLiveView(void)
+// CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* length)
+// *data points into an internal bridge-owned buffer.  Do NOT free it.
+// Valid only until the next GetLiveViewJpeg call.
+int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* length)
 {
-    auto& state = State();
-    std::lock_guard<std::mutex> apiLock(state.apiMutex);
-    if (!state.initialized)
-    {
-        state.SetError("Call CrBridge_Initialize before using the bridge.");
-        return CrBridge_Error_NotInitialized;
-    }
-    if (state.deviceHandle == 0 || !state.IsConnected())
-    {
-        state.SetError("No connected camera.");
-        return CrBridge_Error_NotConnected;
-    }
-    if (state.liveView)
-    {
-        state.ClearError();
-        return CrBridge_Ok;
-    }
-
-    try
-    {
-        // SDK v2.02 has no StartLiveView API; LiveView is active while connected.
-        // Allocate image block and mark active — polling via GetLiveViewImage.
-        state.liveViewImage = std::make_unique<CrImageDataBlock>();
-        state.liveViewBuffer.clear();
-        state.liveView = true;
-        state.ClearError();
-        return CrBridge_Ok;
-    }
-    catch (...)
-    {
-        return CatchException("CrBridge_StartLiveView");
-    }
-}
-
-int32_t SONY_CR_BRIDGE_CALL CrBridge_StopLiveView(void)
-{
-    auto& state = State();
-    std::lock_guard<std::mutex> apiLock(state.apiMutex);
-    if (!state.initialized)
-    {
-        state.SetError("Call CrBridge_Initialize before using the bridge.");
-        return CrBridge_Error_NotInitialized;
-    }
-    if (state.deviceHandle == 0 || !state.IsConnected())
-    {
-        state.SetError("No connected camera.");
-        return CrBridge_Error_NotConnected;
-    }
-    if (!state.liveView)
-    {
-        state.ClearError();
-        return CrBridge_Ok;
-    }
-
-    try
-    {
-        // SDK v2.02 has no StopLiveView API; simply mark inactive and release buffer.
-        state.liveView = false;
-        state.liveViewImage.reset();
-        state.liveViewBuffer.clear();
-        state.ClearError();
-        return CrBridge_Ok;
-    }
-    catch (...)
-    {
-        return CatchException("CrBridge_StopLiveView");
-    }
-}
-
-int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, uint32_t* size, uint32_t timeoutMs)
-{
-    auto& state = State();
-    std::lock_guard<std::mutex> apiLock(state.apiMutex);
-    if (data == nullptr || size == nullptr)
-    {
-        state.SetError("JPEG output pointers must not be null.");
+    if (data == nullptr || length == nullptr)
         return CrBridge_Error_InvalidArgument;
-    }
-    *data = nullptr;
-    *size = 0;
-    if (!state.initialized)
-    {
-        state.SetError("Call CrBridge_Initialize before using the bridge.");
-        return CrBridge_Error_NotInitialized;
-    }
-    if (state.deviceHandle == 0 || !state.IsConnected())
-    {
-        state.SetError("No connected camera.");
-        return CrBridge_Error_NotConnected;
-    }
-    if (!state.liveView)
-    {
-        state.SetError("Live View has not been started.");
-        return CrBridge_Error_InvalidState;
-    }
 
-    try
-    {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(
-            timeoutMs == 0 ? kDefaultLiveViewTimeoutMs : timeoutMs);
-        do
-        {
-            CrImageInfo imageInfo;
-            CrError result = SCRSDK::GetLiveViewImageInfo(state.deviceHandle, &imageInfo);
-            if (result != CrError_None)
-            {
-                state.SetSdkError("GetLiveViewImageInfo", result);
-                return CrBridge_Error_Sdk;
-            }
-
-            const CrInt32u bufferSize = imageInfo.GetBufferSize();
-            if (bufferSize == 0)
-            {
-                state.SetError("Sony SDK reported an empty Live View buffer.");
-                return CrBridge_Error_Sdk;
-            }
-
-            if (!state.liveViewImage)
-            {
-                state.liveViewImage = std::make_unique<CrImageDataBlock>();
-            }
-            if (state.liveViewBuffer.size() < bufferSize)
-            {
-                state.liveViewBuffer.resize(bufferSize);
-            }
-            state.liveViewImage->SetSize(static_cast<CrInt32u>(state.liveViewBuffer.size()));
-            state.liveViewImage->SetData(state.liveViewBuffer.data());
-            result = SCRSDK::GetLiveViewImage(state.deviceHandle, state.liveViewImage.get());
-            if (result == CrError_None)
-            {
-                const CrInt32u imageSize = state.liveViewImage->GetImageSize();
-                if (imageSize == 0 || state.liveViewImage->GetImageData() == nullptr)
-                {
-                    state.SetError("Sony SDK returned an empty Live View JPEG.");
-                    return CrBridge_Error_Sdk;
-                }
-
-                auto* output = static_cast<uint8_t*>(std::malloc(imageSize));
-                if (output == nullptr)
-                {
-                    state.SetError("Could not allocate the Live View JPEG buffer.");
-                    return CrBridge_Error_OutOfMemory;
-                }
-                std::memcpy(output, state.liveViewImage->GetImageData(), imageSize);
-                *data = output;
-                *size = imageSize;
-                state.ClearError();
-                return CrBridge_Ok;
-            }
-
-            if (result != CrWarning_Frame_NotUpdated && result != CrError_Memory_Insufficient)
-            {
-                state.SetSdkError("GetLiveViewImage", result);
-                return CrBridge_Error_Sdk;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        } while (std::chrono::steady_clock::now() < deadline);
-
-        state.SetError("Timed out waiting for a Live View JPEG frame.");
-        return CrBridge_Error_Timeout;
-    }
-    catch (...)
-    {
-        return CatchException("CrBridge_GetLiveViewJpeg");
-    }
-}
-
-void SONY_CR_BRIDGE_CALL CrBridge_FreeBuffer(void* buffer)
-{
-    std::free(buffer);
-}
-
-int32_t SONY_CR_BRIDGE_CALL CrBridge_TakePicture(uint32_t holdMs)
-{
     auto& state = State();
     std::lock_guard<std::mutex> apiLock(state.apiMutex);
     if (!state.initialized)
@@ -981,68 +625,159 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_TakePicture(uint32_t holdMs)
 
     try
     {
-        const CrInt32u duration = holdMs == 0
-            ? kDefaultShutterHoldMs
-            : std::min(holdMs, kMaximumShutterHoldMs);
-        const CrError downResult = SCRSDK::SendCommand(
-            state.deviceHandle, CrCommandId_Release, CrCommandParam_Down);
+        CrImageInfo imageInfo{};
+        CrError result = SCRSDK::GetLiveViewImageInfo(state.deviceHandle, &imageInfo);
+        if (result != CrError_None)
+        {
+            state.SetSdkError("GetLiveViewImageInfo", result);
+            return CrBridge_Error_Sdk;
+        }
 
-        // FIX 3: RAII 快门守卫 — 无论后续如何退出，Shutter Up 必须执行
-        // 防止快门按下后因异常或提前 return 导致相机长期锁死
+        const CrInt32u bufferSize = imageInfo.GetBufferSize();
+        if (bufferSize == 0)
+        {
+            state.SetError("Sony SDK reported an empty Live View buffer.");
+            return CrBridge_Error_Sdk;
+        }
+
+        if (state.liveViewBuffer.size() < bufferSize)
+            state.liveViewBuffer.resize(bufferSize);
+
+        CrImageDataBlock imageBlock{};
+        imageBlock.SetSize(static_cast<CrInt32u>(state.liveViewBuffer.size()));
+        imageBlock.SetData(state.liveViewBuffer.data());
+
+        result = SCRSDK::GetLiveViewImage(state.deviceHandle, &imageBlock);
+        if (result != CrError_None)
+        {
+            state.SetSdkError("GetLiveViewImage", result);
+            return CrBridge_Error_Sdk;
+        }
+
+        const CrInt32u imageSize = imageBlock.GetImageSize();
+        if (imageSize == 0 || imageBlock.GetImageData() == nullptr)
+        {
+            state.SetError("Sony SDK returned an empty Live View JPEG.");
+            return CrBridge_Error_Sdk;
+        }
+
+        *data   = static_cast<uint8_t*>(imageBlock.GetImageData());
+        *length = static_cast<int32_t>(imageSize);
+        state.ClearError();
+        return CrBridge_Ok;
+    }
+    catch (...) { return CatchException("CrBridge_GetLiveViewJpeg"); }
+}
+
+// CrBridge_TakePicture(string targetPath, int timeoutMs)
+// Triggers shutter and waits for the downloaded file to be renamed to targetPath.
+// targetPath: full destination path (UTF-8).  timeoutMs=0 → 30 s default.
+int32_t SONY_CR_BRIDGE_CALL CrBridge_TakePicture(const char* targetPath, int32_t timeoutMs)
+{
+    if (targetPath == nullptr || targetPath[0] == '\0')
+        return CrBridge_Error_InvalidArgument;
+
+    auto& state = State();
+    std::lock_guard<std::mutex> apiLock(state.apiMutex);
+    if (!state.initialized)
+    {
+        state.SetError("Call CrBridge_Initialize before using the bridge.");
+        return CrBridge_Error_NotInitialized;
+    }
+    if (state.deviceHandle == 0 || !state.IsConnected())
+    {
+        state.SetError("No connected camera.");
+        return CrBridge_Error_NotConnected;
+    }
+
+    try
+    {
+        const int32_t waitMs = timeoutMs > 0 ? timeoutMs : kDefaultTakePictureTimeoutMs;
+
+        // Reset download flag before triggering
+        {
+            std::lock_guard<std::mutex> eventLock(state.eventMutex);
+            state.downloadReady = false;
+            state.lastDownloadedFile.clear();
+        }
+
+        const CrDeviceHandle handle = state.deviceHandle;
+
+        // Shutter Down
+        const CrError downResult = SCRSDK::SendCommand(handle, CrCommandId_Release, CrCommandParam_Down);
+
+        // RAII guard: always send Shutter Up
         struct ShutterGuard
         {
-            CrDeviceHandle handle;
-            bool armed;
-            ShutterGuard(CrDeviceHandle h, bool ok) : handle(h), armed(ok) {}
-            ~ShutterGuard()
-            {
-                if (armed && handle != 0)
-                {
-                    try { SCRSDK::SendCommand(handle, CrCommandId_Release, CrCommandParam_Up); }
-                    catch (...) {}
-                }
-            }
+            CrDeviceHandle h; bool armed;
+            ShutterGuard(CrDeviceHandle h_, bool ok) : h(h_), armed(ok) {}
+            ~ShutterGuard() { if (armed && h != 0) { try { SCRSDK::SendCommand(h, CrCommandId_Release, CrCommandParam_Up); } catch (...) {} } }
             void disarm() { armed = false; }
-        } shutterGuard(state.deviceHandle, downResult == CrError_None);
-
-        if (downResult == CrError_None)
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(duration));
-        }
-        const CrError upResult = SCRSDK::SendCommand(
-            state.deviceHandle, CrCommandId_Release, CrCommandParam_Up);
-        // FIX 3b: 手动 Up 已发，守卫解除；但只在 Down 成功时才解除
-        // （若 Down 失败，守卫本就未 armed，disarm 是 no-op，逻辑一致）
-        shutterGuard.disarm();
+        } shutterGuard(handle, downResult == CrError_None);
 
         if (downResult != CrError_None)
         {
             state.SetSdkError("SendCommand(shutter down)", downResult);
             return CrBridge_Error_Sdk;
         }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(kDefaultShutterHoldMs));
+
+        const CrError upResult = SCRSDK::SendCommand(handle, CrCommandId_Release, CrCommandParam_Up);
+        shutterGuard.disarm();
+
         if (upResult != CrError_None)
         {
             state.SetSdkError("SendCommand(shutter up)", upResult);
             return CrBridge_Error_Sdk;
         }
+
+        // Wait for OnCompleteDownload callback
+        const auto deadline = std::chrono::steady_clock::now()
+                            + std::chrono::milliseconds(waitMs);
+        std::string downloadedPath;
+        {
+            std::unique_lock<std::mutex> eventLock(state.eventMutex);
+            const bool ok = state.eventChanged.wait_until(eventLock, deadline,
+                [&state] { return state.downloadReady; });
+            if (!ok)
+            {
+                state.SetError("Timed out waiting for image download after shutter.");
+                return CrBridge_Error_Timeout;
+            }
+            downloadedPath = state.lastDownloadedFile;
+        }
+
+        // Move/rename the downloaded file to targetPath if paths differ
+        if (!downloadedPath.empty() && downloadedPath != targetPath)
+        {
+#ifdef _WIN32
+            // Convert UTF-8 paths to wide for MoveFileExW
+            auto toWide = [](const std::string& s) -> std::wstring {
+                const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+                if (n <= 0) return {};
+                std::wstring w(static_cast<size_t>(n), L'\0');
+                MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
+                return w;
+            };
+            MoveFileExW(toWide(downloadedPath).c_str(), toWide(targetPath).c_str(),
+                        MOVEFILE_REPLACE_EXISTING);
+#else
+            std::rename(downloadedPath.c_str(), targetPath);
+#endif
+        }
+
         state.ClearError();
         return CrBridge_Ok;
     }
-    catch (...)
-    {
-        return CatchException("CrBridge_TakePicture");
-    }
+    catch (...) { return CatchException("CrBridge_TakePicture"); }
 }
 
+// CrBridge_LastError(char* utf8Message, int capacity)
 int32_t SONY_CR_BRIDGE_CALL CrBridge_LastError(char* utf8Message, int32_t capacity)
 {
-    try
-    {
-        return CopyUtf8String(State().GetError(), utf8Message, capacity);
-    }
-    catch (...)
-    {
-        return CatchException("CrBridge_LastError");
-    }
+    try { return CopyUtf8String(State().GetError(), utf8Message, capacity); }
+    catch (...) { return CatchException("CrBridge_LastError"); }
 }
-}
+
+} // extern "C"

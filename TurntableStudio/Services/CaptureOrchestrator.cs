@@ -90,7 +90,9 @@ namespace TurntableStudio.Services
                         // 2. 配置保存路径并触发快门
                         // 删除可能存在的旧文件（重试场景）
                         if (File.Exists(filePath)) File.Delete(filePath);
-                        _camera.TakePicture(holdMs: 100);
+                        // 新 ABI：TakePicture(targetPath, timeoutMs)
+                        // bridge 负责等待下载并移动到 targetPath
+                        _camera.TakePicture(filePath, timeoutMs: FileWaitTimeoutMs);
 
                         // 3. 轮询等待文件落盘（相机异步传图）
                         bool fileReady = await WaitForFileAsync(filePath, ct);

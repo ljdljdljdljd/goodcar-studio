@@ -296,12 +296,12 @@ namespace TurntableStudio.ViewModels
                 int count = 0;
                 await Task.Run(() =>
                 {
-                    _camera.Initialize();
-                    count = _camera.GetDeviceCount();
-                    if (count == 0)
-                        throw new InvalidOperationException("未发现索尼相机，请检查 USB 连接并确认已开启 PC 遥控模式");
+                    // 新 ABI：Initialize(sdkRoot) → GetDeviceDescriptor(index) → Connect(descriptor, interfaceType)
+                    // sdkRoot 为 null 时 bridge 使用程序目录（Cr_Core.dll 与 SonyCrBridge.dll 同目录）
+                    _camera.Initialize(null);
                     desc = _camera.GetDeviceDescriptor(0);
-                    _camera.Connect(0);
+                    _camera.Connect(desc, interfaceType: 0); // 0 = USB
+                    count = 1;
                 });
                 CameraConnected = true;
                 AddLog($"相机连接成功（共 {count} 台）", LogLevel.Success);
