@@ -47,12 +47,17 @@ namespace TurntableStudio.Services
         /// toleranceDeg：停稳容差（默认 0.5°）
         /// stabilizeMs：确认停稳所需的稳定时间窗口（默认 300ms）
         /// timeoutMs：总等待超时（默认 60000ms）
+        /// forward：null 表示使用 SDK 默认方向（正转），true=正转，false=反转
         /// </summary>
         public async Task MoveToAsync(double targetDeg, double toleranceDeg = 0.5,
-            int stabilizeMs = 300, int timeoutMs = 60000)
+            int stabilizeMs = 300, int timeoutMs = 60000, bool? forward = null)
         {
             EnsureConnected();
-            _controller!.MoveTo(targetDeg);
+            if (forward.HasValue)
+                _controller!.MoveTo(targetDeg,
+                    forward.Value ? MovementDirection.Forward : MovementDirection.Reverse);
+            else
+                _controller!.MoveTo(targetDeg);
 
             var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
             DateTime? stableStart = null;
@@ -132,8 +137,7 @@ namespace TurntableStudio.Services
         public async Task MoveToWithDirectionAsync(double targetDeg, bool forward)
         {
             EnsureConnected();
-            _controller!.SetDirection(forward ? MovementDirection.Forward : MovementDirection.Reverse);
-            await MoveToAsync(targetDeg);
+            await MoveToAsync(targetDeg, forward: forward);
         }
 
         public void Dispose()
