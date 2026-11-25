@@ -23,17 +23,17 @@ jobs:
         with:
           arch: amd64
 
-      - name: Configure SonyCrBridge (cmake)
+      - name: Configure SonyCrBridge (cmake + Ninja)
         run: |
-          cmake -S . -B build `
-            -G "Visual Studio 17 2022" -A x64
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release
 
       - name: Build SonyCrBridge.dll
-        run: cmake --build build --config Release
+        run: cmake --build build
 
       - name: Copy SonyCrBridge.dll to libs
         run: |
-          copy build\Release\SonyCrBridge.dll libs\SonyCrBridge.dll
+          copy build\SonyCrBridge.dll libs\SonyCrBridge.dll
 
       - name: Build WPF upper-computer
         run: |
