@@ -53,11 +53,10 @@ namespace TurntableStudio.Services
             int stabilizeMs = 300, int timeoutMs = 60000, bool? forward = null)
         {
             EnsureConnected();
+            // 只设方向 + 发 Start 脉冲，不写目标寄存器（1518=最大旋转角度，不能改）
             if (forward.HasValue)
-                _controller!.MoveTo(targetDeg,
-                    forward.Value ? MovementDirection.Forward : MovementDirection.Reverse);
-            else
-                _controller!.MoveTo(targetDeg);
+                _controller!.SetDirection(forward.Value ? MovementDirection.Forward : MovementDirection.Reverse);
+            _controller!.Start();
 
             var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
             DateTime? stableStart = null;
