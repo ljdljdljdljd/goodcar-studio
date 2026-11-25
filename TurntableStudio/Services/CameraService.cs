@@ -48,6 +48,15 @@ namespace TurntableStudio.Services
             [MarshalAs(UnmanagedType.LPStr)] string targetPath,
             int timeoutMs);
 
+        [DllImport(BridgeDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int CrBridge_GetDeviceCount();
+
+        [DllImport(BridgeDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int CrBridge_StartLiveView();
+
+        [DllImport(BridgeDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int CrBridge_StopLiveView();
+
         [DllImport(BridgeDll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
         private static extern int CrBridge_SetSaveInfo(
             [MarshalAs(UnmanagedType.LPStr)] string path,

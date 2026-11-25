@@ -688,6 +688,50 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* le
     catch (...) { return CatchException("CrBridge_GetLiveViewJpeg"); }
 }
 
+// CrBridge_GetDeviceCount() — returns number of enumerated cameras (>= 0), or negative on error
+SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_GetDeviceCount(void)
+{
+    auto& state = State();
+    std::lock_guard<std::mutex> apiLock(state.apiMutex);
+    if (!state.initialized) { state.SetError("Not initialized."); return CrBridge_Error_NotInitialized; }
+    if (state.devices == nullptr) return 0;
+    return static_cast<int32_t>(state.devices->GetCount());
+}
+
+// CrBridge_StartLiveView() — begin streaming live view frames to OnNotifyPostViewImage callback
+SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_StartLiveView(void)
+{
+    auto& state = State();
+    std::lock_guard<std::mutex> apiLock(state.apiMutex);
+    if (!state.initialized) { state.SetError("Not initialized."); return CrBridge_Error_NotInitialized; }
+    if (state.deviceHandle == 0 || !state.IsConnected()) { state.SetError("No connected camera."); return CrBridge_Error_NotConnected; }
+    try
+    {
+        const CrError result = SCRSDK::StartLiveView(state.deviceHandle);
+        if (result != CrError_None) { state.SetSdkError("StartLiveView", result); return CrBridge_Error_Sdk; }
+        state.ClearError();
+        return CrBridge_Ok;
+    }
+    catch (...) { return CatchException("CrBridge_StartLiveView"); }
+}
+
+// CrBridge_StopLiveView() — stop live view streaming
+SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_StopLiveView(void)
+{
+    auto& state = State();
+    std::lock_guard<std::mutex> apiLock(state.apiMutex);
+    if (!state.initialized) { state.SetError("Not initialized."); return CrBridge_Error_NotInitialized; }
+    if (state.deviceHandle == 0) return CrBridge_Ok; // already disconnected, nothing to stop
+    try
+    {
+        const CrError result = SCRSDK::StopLiveView(state.deviceHandle);
+        if (result != CrError_None) { state.SetSdkError("StopLiveView", result); return CrBridge_Error_Sdk; }
+        state.ClearError();
+        return CrBridge_Ok;
+    }
+    catch (...) { return CatchException("CrBridge_StopLiveView"); }
+}
+
 // CrBridge_SetSaveInfo(string path, string prefix, int startNo)
 // Sets the PC-side save folder so Sony SDK downloads images after shutter.
 // Must be called after Connect and before TakePicture.
