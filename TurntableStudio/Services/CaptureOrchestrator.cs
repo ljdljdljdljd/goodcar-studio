@@ -98,14 +98,27 @@ namespace TurntableStudio.Services
                 for (int attempt = 1; attempt <= MaxRetries && !success; attempt++)
                 {
                     ct.ThrowIfCancellationRequested();
+
+                    // 重试前等转盘完全静止（上次超时Stop后转盘还在滑行）
+                    if (attempt > 1)
+                    {
+                        await Task.Delay(2000, ct); // 给 Stop 后的惯性滑行留足时间
+                    }
+
                     Log?.Invoke(this, $"[{i + 1}/{shotCount}] 转动到 {targetAngle:F1}°（第{attempt}次）");
 
                     try
                     {
                         // 1. 转盘移动并等待停稳
+                        // 超时动态计算：角度差 / 估算速度 * 2倍余量，最少30s，最多120s
+                        double currentForTimeout = _turntable.ReadAngle();
+                        double angDiff = Math.Abs(currentForTimeout - targetAngle);
+                        if (angDiff > 180) angDiff = 360 - angDiff;
+                        // 粗估：230mm/s、24690脉冲/度 → 约1°/s，5°需约5s；给60s兜底
+                        int dynamicTimeout = (int)Math.Max(30000, Math.Min(120000, angDiff * 1000 * 3 + 5000));
                         var sw = System.Diagnostics.Stopwatch.StartNew();
                         await _turntable.MoveToAsync(targetAngle, toleranceDeg: 0.5,
-                            stabilizeMs: 300, timeoutMs: 30000);
+                            stabilizeMs: 500, timeoutMs: dynamicTimeout);
                         double actualAngle = _turntable.ReadAngle();
 
                         // 2. 配置保存路径并触发快门
