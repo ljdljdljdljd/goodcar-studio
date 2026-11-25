@@ -57,6 +57,8 @@ target_compile_definitions(SonyCrBridge PRIVATE
     SONY_CR_BRIDGE_BUILD
     WIN32_LEAN_AND_MEAN
     NOMINMAX
+    UNICODE
+    _UNICODE
 )
 set_target_properties(SonyCrBridge PROPERTIES
     OUTPUT_NAME SonyCrBridge
