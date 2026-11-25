@@ -376,14 +376,14 @@ namespace TurntableStudio.ViewModels
                 _liveViewTimer?.Stop();
                 _liveViewTimer?.Dispose();
                 _liveViewTimer = null;
-                _camera.StopLiveView();
+                // 新 ABI 无 StopLiveView
                 LiveViewActive  = false;
                 LiveViewImage   = null;
                 AddLog("实时取景已关闭", LogLevel.Info);
             }
             else
             {
-                await Task.Run(() => _camera.StartLiveView());
+                // 新 ABI 无 StartLiveView，直接启动轮询
                 LiveViewActive  = true;
                 _liveViewTimer  = new System.Timers.Timer(100);
                 _liveViewTimer.Elapsed += (_, _) => RefreshLiveView();
@@ -395,7 +395,7 @@ namespace TurntableStudio.ViewModels
 
         private void RefreshLiveView()
         {
-            byte[]? jpeg = _camera.GetLiveViewJpeg(500);
+            byte[]? jpeg = _camera.GetLiveViewJpeg();
             if (jpeg == null || jpeg.Length == 0) return;
             UI(() =>
             {

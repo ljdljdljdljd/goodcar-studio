@@ -30,7 +30,7 @@ namespace TurntableStudio.Services
             try
             {
                 camera = new CameraService();
-                camera.Initialize();
+                camera.Initialize(null); // null → 使用程序目录
                 Pass("CrBridge_Initialize 成功");
             }
             catch (Exception ex)
@@ -40,56 +40,55 @@ namespace TurntableStudio.Services
             }
 
             // ── 2. 枚举相机 ───────────────────────────────────────────
-            Section("2. 枚举已连接相机");
-            int deviceCount = 0;
+            Section("2. 枚举已连接相机（GetDeviceDescriptor(0) 探测）");
+            string desc = string.Empty;
+            bool hasCamera = false;
             try
             {
-                deviceCount = camera.GetDeviceCount();
-                if (deviceCount > 0)
-                    Pass($"发现 {deviceCount} 台相机");
-                else
-                    Fail("未发现任何相机，请检查 USB 连接与 PC 遥控设置（菜单 → 传输 & 遥控 → PC 遥控功能 → 开启）");
+                desc = camera.GetDeviceDescriptor(0);
+                hasCamera = true;
+                Pass($"发现相机，描述符：{desc}");
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                Fail("未发现任何相机，请检查 USB 连接与 PC 遥控设置（菜单 → 传输 & 遥控 → PC 遥控功能 → 开启）");
             }
             catch (Exception ex)
             {
-                Fail($"GetDeviceCount 失败：{ex.Message}");
+                Fail($"GetDeviceDescriptor 失败：{ex.Message}");
             }
 
-            if (deviceCount > 0)
+            if (hasCamera)
             {
-                Section("3. 相机设备描述");
+                // ── 3. 连接相机 ───────────────────────────────────────
+                Section("3. 连接相机（USB）");
                 try
                 {
-                    string desc = camera.GetDeviceDescriptor(0);
-                    Pass($"描述符：{desc}");
-                }
-                catch (Exception ex) { Fail($"GetDeviceDescriptor 失败：{ex.Message}"); }
-
-                Section("4. 连接相机");
-                try
-                {
-                    camera.Connect(0, timeoutMs: 15000);
+                    camera.Connect(desc, interfaceType: 0);
                     Pass("CrBridge_Connect 成功");
 
-                    Section("5. 实时取景（取一帧）");
+                    // ── 4. LiveView 一帧 ──────────────────────────────
+                    Section("4. 实时取景（取一帧，新 ABI 无 StartLiveView）");
                     try
                     {
-                        camera.StartLiveView();
                         System.Threading.Thread.Sleep(500);
-                        byte[]? frame = camera.GetLiveViewJpeg(2000);
+                        byte[]? frame = camera.GetLiveViewJpeg();
                         if (frame != null && frame.Length > 1024)
                             Pass($"LiveView 帧大小：{frame.Length / 1024} KB");
                         else
                             Fail($"LiveView 帧无效（大小：{frame?.Length ?? 0} B）");
-                        camera.StopLiveView();
                     }
                     catch (Exception ex) { Fail($"LiveView 失败：{ex.Message}"); }
 
-                    Section("6. 快门测试（1 次拍照）");
+                    // ── 5. 快门测试 ───────────────────────────────────
+                    Section("5. 快门测试（1 次拍照）");
                     try
                     {
-                        camera.TakePicture(holdMs: 100);
-                        Pass("TakePicture 返回成功");
+                        string testPath = Path.Combine(
+                            AppDomain.CurrentDomain.BaseDirectory,
+                            $"smoketest_shot_{DateTime.Now:HHmmss}.jpg");
+                        camera.TakePicture(testPath, timeoutMs: 30000);
+                        Pass($"TakePicture 返回成功，目标：{testPath}");
                     }
                     catch (Exception ex) { Fail($"TakePicture 失败：{ex.Message}"); }
                 }
@@ -97,8 +96,8 @@ namespace TurntableStudio.Services
                 finally { try { camera.Disconnect(); } catch { } }
             }
 
-            // ── 7. 转盘 PLC 连接 ──────────────────────────────────────
-            Section($"7. 转盘 PLC 连接（{plcIp}）");
+            // ── 6. 转盘 PLC 连接 ──────────────────────────────────────
+            Section($"6. 转盘 PLC 连接（{plcIp}）");
             using (var turntable = new TurntableService())
             {
                 try
@@ -108,7 +107,7 @@ namespace TurntableStudio.Services
                     if (turntable.IsConnected)
                     {
                         Pass($"PLC 已连接：{plcIp}");
-                        Section("8. 读取当前角度");
+                        Section("7. 读取当前角度");
                         try
                         {
                             double angle = turntable.ReadAngle();
