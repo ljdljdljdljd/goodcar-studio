@@ -63,6 +63,20 @@ namespace TurntableStudio.Services
 
             Directory.CreateDirectory(saveFolder);
 
+            // Sony SDK SetSaveInfo 要求目录已存在且可写（CrError_File_ReadOnly=0x810c 表示目录不存在或无写权限）
+            // 写一个测试文件验证可写性，Sony SDK 不会自己创建目录
+            string testFile = Path.Combine(saveFolder, ".writetest");
+            try
+            {
+                File.WriteAllText(testFile, "ok");
+                File.Delete(testFile);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"保存目录不可写：{saveFolder}。请确认目录存在且有写入权限。({ex.Message})");
+            }
+
             // 告诉相机把图片下载到 PC 端的 saveFolder
             _camera.SetSaveInfo(saveFolder, filePrefix);
             double stepAngle = 360.0 / shotCount;
