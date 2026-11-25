@@ -32,24 +32,6 @@ namespace TurntableStudio.ViewModels
 
     public enum LogLevel { Info, Success, Error, Warning }
 
-    public sealed class InvertBoolConverter : IValueConverter
-    {
-        public static readonly InvertBoolConverter Instance = new();
-        public object Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
-            => value is bool b ? !b : false;
-        public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
-            => value is bool b ? !b : false;
-    }
-
-    public sealed class GreaterThanZeroConverter : IValueConverter
-    {
-        public static readonly GreaterThanZeroConverter Instance = new();
-        public object Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
-            => value is int count && count > 0;
-        public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
-            => throw new NotImplementedException();
-    }
-
     public sealed class ShotThumbnailItem
     {
         public int ShotNumber { get; set; }
@@ -648,17 +630,6 @@ namespace TurntableStudio.ViewModels
                 AddLog("回零指令已发送", LogLevel.Success);
             }
             catch (Exception ex) { AddLog($"回零失败：{ex.Message}", LogLevel.Error); }
-        }
-
-        private async Task WriteParamsAsync()
-        {
-            if (!PlcConnected) { AddLog("请先连接 PLC", LogLevel.Warning); return; }
-            try
-            {
-                await Task.Run(() => _turntable.Configure(TurntableSpeed, TurntablePulse, TurntableAccelDecel));
-                AddLog($"参数已写入：速度 {TurntableSpeed} / 脉冲 {TurntablePulse} / 加减速 {TurntableAccelDecel} ms", LogLevel.Success);
-            }
-            catch (Exception ex) { AddLog($"写入参数失败：{ex.Message}", LogLevel.Error); }
         }
 
         private async Task MoveToAngleAsync(bool forward)
