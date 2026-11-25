@@ -39,4 +39,13 @@ namespace TurntableStudio.ViewModels
         public object Convert(object value, Type t, object p, CultureInfo c) => value is not true;
         public object ConvertBack(object v, Type t, object p, CultureInfo c) => v is not true;
     }
+
+    /// <summary>int count &gt; 0 → bool（控制缩略图区显隐）</summary>
+    public sealed class GreaterThanZeroConverter : IValueConverter
+    {
+        public static readonly GreaterThanZeroConverter Instance = new();
+        public object Convert(object value, Type t, object p, CultureInfo c)
+            => value is int count && count > 0;
+        public object ConvertBack(object v, Type t, object p, CultureInfo c) => throw new NotSupportedException();
+    }
 }
