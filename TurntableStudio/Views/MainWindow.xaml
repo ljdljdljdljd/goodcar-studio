@@ -146,9 +146,42 @@
         </Border>
 
         <!-- ══════════════════════════════════════════════════════════════
-             主体区域：左 2/3 实时取景+角度表盘  |  右 1/3 控制面板
+             TabControl：自动拍摄 | 转盘控制
              ══════════════════════════════════════════════════════════════ -->
-        <Grid>
+        <TabControl Background="{StaticResource BgBase}" BorderThickness="0">
+            <TabControl.Resources>
+                <Style TargetType="TabItem">
+                    <Setter Property="Background" Value="{StaticResource BgCard}"/>
+                    <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+                    <Setter Property="FontSize" Value="14"/>
+                    <Setter Property="Padding" Value="20,8"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="TabItem">
+                                <Border Name="Border" Background="{TemplateBinding Background}"
+                                        BorderBrush="{StaticResource Border}" BorderThickness="1,1,1,0"
+                                        CornerRadius="4,4,0,0" Margin="2,0">
+                                    <ContentPresenter x:Name="ContentSite" VerticalAlignment="Center" HorizontalAlignment="Center"
+                                                      ContentSource="Header" Margin="{TemplateBinding Padding}"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter TargetName="Border" Property="Background" Value="{StaticResource BgBase}"/>
+                                        <Setter Property="Foreground" Value="{StaticResource BrandPurple}"/>
+                                        <Setter Property="FontWeight" Value="SemiBold"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </TabControl.Resources>
+
+            <!-- ═══════════════════════════════════════════════════════
+                 Tab 1: 自动拍摄（原有功能）
+                 ═══════════════════════════════════════════════════════ -->
+            <TabItem Header="自动拍摄">
+                <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="2*"/>
                 <ColumnDefinition Width="1*" MinWidth="380"/>
@@ -337,65 +370,6 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- ⑥ 转盘控制 -->
-                    <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="12" Margin="0,0,0,12">
-                        <StackPanel>
-                            <TextBlock Text="转盘控制" FontWeight="Bold" FontSize="14" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,10"/>
-
-                            <!-- 参数行 -->
-                            <Grid Margin="0,0,0,6">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" Margin="0,0,4,0">
-                                    <TextBlock Text="速度" Style="{StaticResource Label}"/>
-                                    <TextBox Text="{Binding TurntableSpeed, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Input}" IsEnabled="{Binding PlcConnected}"/>
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" Margin="4,0">
-                                    <TextBlock Text="脉冲数" Style="{StaticResource Label}"/>
-                                    <TextBox Text="{Binding TurntablePulse, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Input}" IsEnabled="{Binding PlcConnected}"/>
-                                </StackPanel>
-                                <StackPanel Grid.Column="2" Margin="4,0,0,0">
-                                    <TextBlock Text="加减速(ms)" Style="{StaticResource Label}"/>
-                                    <TextBox Text="{Binding TurntableAccelDecel, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Input}" IsEnabled="{Binding PlcConnected}"/>
-                                </StackPanel>
-                            </Grid>
-                            <Button Content="写入参数" Command="{Binding WriteParamsCommand}" Style="{StaticResource ActionBtn}" Margin="0,0,0,10"
-                                    IsEnabled="{Binding CanUseManual}" HorizontalAlignment="Left" Padding="16,6"/>
-
-                            <!-- 目标角度 + 方向 -->
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                <RadioButton Content="正转" IsChecked="{Binding IsForwardDirection}" Foreground="{StaticResource TextPrimary}" Margin="0,0,8,0" IsEnabled="{Binding CanUseManual}"/>
-                                <RadioButton Content="反转" IsChecked="{Binding IsForwardDirection, Converter={x:Static vm:InvertBoolConverter.Instance}}" Foreground="{StaticResource TextPrimary}" IsEnabled="{Binding CanUseManual}"/>
-                            </StackPanel>
-
-                            <!-- 手动点动 -->
-                            <TextBlock Text="手动点动（按住转动，松开停止）" Style="{StaticResource Label}" Margin="0,0,0,4"/>
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                <Button Content="手动正转 ▶" Style="{StaticResource ActionBtn}" IsEnabled="{Binding PlcConnected}"
-                                        Margin="0,0,6,0" Padding="12,6"
-                                        PreviewMouseLeftButtonDown="ManualForwardDown"
-                                        PreviewMouseLeftButtonUp="ManualJogUp" LostMouseCapture="ManualJogLostCapture"/>
-                                <Button Content="◀ 手动反转" Style="{StaticResource ActionBtn}" IsEnabled="{Binding PlcConnected}"
-                                        Padding="12,6"
-                                        PreviewMouseLeftButtonDown="ManualReverseDown"
-                                        PreviewMouseLeftButtonUp="ManualJogUp" LostMouseCapture="ManualJogLostCapture"/>
-                            </StackPanel>
-
-                            <!-- 启停 + 回零 -->
-                            <StackPanel Orientation="Horizontal">
-                                <Button Content="▶ 启动" Command="{Binding StartRotationCommand}" Style="{StaticResource ActionBtn}"
-                                        IsEnabled="{Binding CanUseManual}" Margin="0,0,6,0" Padding="12,6"/>
-                                <Button Content="■ 停止" Command="{Binding StopRotationCommand}" Style="{StaticResource ActionBtn}"
-                                        IsEnabled="{Binding PlcConnected}" Margin="0,0,6,0" Padding="12,6"/>
-                                <Button Content="⌂ 零点确认" Command="{Binding GoHomeCommand}" Style="{StaticResource ActionBtn}"
-                                        IsEnabled="{Binding CanUseManual}" Padding="12,6"/>
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-
                     <!-- ⑤ 彩色日志流（ItemsControl 绑定 LogEntries，Color 属性绑定到 Foreground）-->
                     <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="12">
                         <StackPanel>
@@ -418,5 +392,126 @@
             </ScrollViewer>
 
         </Grid>
+            </TabItem>
+
+            <!-- ═══════════════════════════════════════════════════════
+                 Tab 2: 转盘控制（手动控制）
+                 ═══════════════════════════════════════════════════════ -->
+            <TabItem Header="转盘控制">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="20" MaxWidth="800">
+
+                        <!-- 参数配置区 -->
+                        <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="16" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="转盘参数配置" FontWeight="Bold" FontSize="16" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,12"/>
+
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                        <TextBlock Text="旋转速度" Style="{StaticResource Label}"/>
+                                        <TextBox Text="{Binding TurntableSpeed, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Input}" IsEnabled="{Binding PlcConnected}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="8,0">
+                                        <TextBlock Text="每度脉冲数" Style="{StaticResource Label}"/>
+                                        <TextBox Text="{Binding TurntablePulse, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Input}" IsEnabled="{Binding PlcConnected}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2" Margin="8,0,0,0">
+                                        <TextBlock Text="加减速时间 (ms)" Style="{StaticResource Label}"/>
+                                        <TextBox Text="{Binding TurntableAccelDecel, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Input}" IsEnabled="{Binding PlcConnected}"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <Button Content="写入参数" Command="{Binding WriteParamsCommand}" Style="{StaticResource ActionBtn}"
+                                        IsEnabled="{Binding CanUseManual}" HorizontalAlignment="Left" Padding="20,8" Margin="0,12,0,0"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 方向选择区 -->
+                        <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="16" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="旋转方向" FontWeight="Bold" FontSize="16" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,12"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <RadioButton Content="正转" IsChecked="{Binding IsForwardDirection}" Foreground="{StaticResource TextPrimary}"
+                                                 FontSize="14" Margin="0,0,24,0" IsEnabled="{Binding CanUseManual}"/>
+                                    <RadioButton Content="反转" IsChecked="{Binding IsForwardDirection, Converter={x:Static vm:InvertBoolConverter.Instance}}"
+                                                 Foreground="{StaticResource TextPrimary}" FontSize="14" IsEnabled="{Binding CanUseManual}"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 手动点动区 -->
+                        <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="16" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="手动点动" FontWeight="Bold" FontSize="16" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,8"/>
+                                <TextBlock Text="按住按钮转动，松开停止" Foreground="{StaticResource TextSecondary}" FontSize="12" Margin="0,0,0,12"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Button Content="▶ 手动正转" Style="{StaticResource ActionBtn}" IsEnabled="{Binding PlcConnected}"
+                                            Margin="0,0,12,0" Padding="24,12" FontSize="14"
+                                            PreviewMouseLeftButtonDown="ManualForwardDown"
+                                            PreviewMouseLeftButtonUp="ManualJogUp"
+                                            LostMouseCapture="ManualJogLostCapture"/>
+                                    <Button Content="◀ 手动反转" Style="{StaticResource ActionBtn}" IsEnabled="{Binding PlcConnected}"
+                                            Padding="24,12" FontSize="14"
+                                            PreviewMouseLeftButtonDown="ManualReverseDown"
+                                            PreviewMouseLeftButtonUp="ManualJogUp"
+                                            LostMouseCapture="ManualJogLostCapture"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 启停控制区 -->
+                        <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="16" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="启停控制" FontWeight="Bold" FontSize="16" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,12"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Button Content="▶ 启动" Command="{Binding StartRotationCommand}" Style="{StaticResource ActionBtn}"
+                                            IsEnabled="{Binding CanUseManual}" Margin="0,0,12,0" Padding="24,12" FontSize="14"
+                                            Background="{StaticResource SuccessGreen}" Foreground="#1E1E2E"/>
+                                    <Button Content="■ 停止" Command="{Binding StopRotationCommand}" Style="{StaticResource ActionBtn}"
+                                            IsEnabled="{Binding PlcConnected}" Margin="0,0,12,0" Padding="24,12" FontSize="14"
+                                            Background="{StaticResource ErrorRed}" Foreground="#1E1E2E"/>
+                                    <Button Content="⌂ 回零" Command="{Binding GoHomeCommand}" Style="{StaticResource ActionBtn}"
+                                            IsEnabled="{Binding CanUseManual}" Padding="24,12" FontSize="14"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 当前角度显示 -->
+                        <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="16" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="当前转盘角度" FontWeight="Bold" FontSize="16" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,8"/>
+                                <TextBlock Text="{Binding CurrentAngleText}" Foreground="{StaticResource SuccessGreen}"
+                                           FontSize="36" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 操作日志 -->
+                        <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="16">
+                            <StackPanel>
+                                <TextBlock Text="运行日志" FontWeight="Bold" FontSize="16" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,8"/>
+                                <ScrollViewer Height="200" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding LogEntries}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Foreground="{Binding Color}" FontSize="11" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,1">
+                                                    <Run Text="{Binding Time, Mode=OneWay}"/><Run Text=" "/><Run Text="{Binding Message, Mode=OneWay}"/>
+                                                </TextBlock>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </StackPanel>
+                        </Border>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+        </TabControl>
     </DockPanel>
 </Window>
