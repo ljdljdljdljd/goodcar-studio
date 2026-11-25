@@ -9,7 +9,6 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using Huateng.Turntable.Sdk;
 using TurntableStudio.Services;
 
 namespace TurntableStudio.ViewModels
@@ -33,10 +32,10 @@ namespace TurntableStudio.ViewModels
     public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         private readonly TurntableService _turntable = new();
-        private CaptureJobWrapper? _captureJob;
-        private (TurntableController Controller, string PlcIp)? _capturePlc;
-        private string? _connectedPlcIp;
+        private readonly CameraService _camera = new();
+        private CaptureOrchestrator? _orchestrator;
         private CancellationTokenSource? _captureCts;
+        private System.Timers.Timer? _liveViewTimer;
         private System.Timers.Timer? _angleTimer;
         private bool _disposed;
 
@@ -222,7 +221,7 @@ namespace TurntableStudio.ViewModels
         public bool IsForwardDirection { get => _isForwardDirection; set => Set(ref _isForwardDirection, value); }
 
         // ── 守卫 ─────────────────────────────────────────────────────
-        public bool CanStartCapture => PlcConnected && CameraConnected;
+        public bool CanStartCapture => PlcConnected && CameraConnected && !IsCapturing;
 
         // ── 命令 ─────────────────────────────────────────────────────
         public ICommand ConnectPlcCommand    { get; }
@@ -245,7 +244,7 @@ namespace TurntableStudio.ViewModels
 
             ConnectPlcCommand     = new AsyncRelayCommand(ConnectPlcAsync);
             ConnectCameraCommand  = new AsyncRelayCommand(ConnectCameraAsync);
-            StartStopCommand      = new RelayCommand(async _ => await StartStopAsync());
+            StartStopCommand      = new AsyncRelayCommand(StartStopAsync);
             ToggleLiveViewCommand = new AsyncRelayCommand(ToggleLiveViewAsync);
             BrowseFolderCommand   = new RelayCommand(BrowseFolder);
             WriteParamsCommand    = new AsyncRelayCommand(WriteParamsAsync);
@@ -263,20 +262,16 @@ namespace TurntableStudio.ViewModels
         {
             if (PlcConnected)
             {
-                if (IsCapturing) { AddLog("请先停止拍摄", LogLevel.Warning); return; }
                 StopAnglePolling();
                 _turntable.Disconnect();
-                _connectedPlcIp = null;
                 PlcConnected = false;
                 AddLog("PLC 已断开", LogLevel.Warning);
                 return;
             }
-            string plcIp = PlcIp;
-            AddLog($"正在连接 PLC {plcIp}…", LogLevel.Info);
+            AddLog($"正在连接 PLC {PlcIp}…", LogLevel.Info);
             try
             {
-                await Task.Run(() => _turntable.Connect(plcIp));
-                _connectedPlcIp = plcIp;
+                await Task.Run(() => _turntable.Connect(PlcIp));
                 PlcConnected = true;
                 AddLog("PLC 连接成功", LogLevel.Success);
                 StartAnglePolling();
@@ -287,57 +282,32 @@ namespace TurntableStudio.ViewModels
         // ── 连接相机 ─────────────────────────────────────────────────
         private async Task ConnectCameraAsync()
         {
-            if (IsCapturing) { AddLog("请先停止拍摄", LogLevel.Warning); return; }
-
+            if (CameraConnected)
+            {
+                _camera.Disconnect();
+                CameraConnected = false;
+                AddLog("相机已断开", LogLevel.Warning);
+                return;
+            }
+            AddLog("初始化相机 SDK…", LogLevel.Info);
             try
             {
-                if (CameraConnected)
+                string desc = string.Empty;
+                int count = 0;
+                await Task.Run(() =>
                 {
-                    StopLiveView();
-                    _captureJob?.DisconnectCamera();
-                    CameraConnected = false;
-                    ReleaseCaptureJob();
-                    AddLog("相机已断开", LogLevel.Warning);
-                    return;
-                }
-
-                AddLog("初始化相机 SDK…", LogLevel.Info);
-                string plcIp = _connectedPlcIp ?? PlcIp;
-                var controller = new TurntableController(plcIp);
-                _capturePlc = (controller, plcIp);
-                var job = new CaptureJobWrapper(controller);
-                _captureJob = job;
-                job.Progress += (_, progress) => UI(() =>
-                {
-                    ProgressCurrent = progress.Current;
-                    ProgressTotal = progress.Total;
+                    // 新 ABI：Initialize(sdkRoot) → GetDeviceDescriptor(index) → Connect(descriptor, interfaceType)
+                    // sdkRoot 为 null 时 bridge 使用程序目录（Cr_Core.dll 与 SonyCrBridge.dll 同目录）
+                    _camera.Initialize(null);
+                    desc = _camera.GetDeviceDescriptor(0);
+                    _camera.Connect(desc, interfaceType: 0); // 0 = USB
+                    count = 1;
                 });
-                job.Log += (_, message) => AddLog(message, LogLevel.Info);
-                job.Initialize(AppDomain.CurrentDomain.BaseDirectory);
-                await job.ConnectCameraAsync();
-                if (_disposed) return;
                 CameraConnected = true;
-                AddLog("相机连接成功", LogLevel.Success);
+                AddLog($"相机连接成功（共 {count} 台）", LogLevel.Success);
+                AddLog($"设备：{desc}", LogLevel.Info);
             }
-            catch (Exception ex)
-            {
-                if (!CameraConnected) ReleaseCaptureJob();
-                AddLog(ex.Message, LogLevel.Error);
-            }
-        }
-
-        private void ReleaseCaptureJob()
-        {
-            try
-            {
-                _captureJob?.Dispose();
-            }
-            finally
-            {
-                _captureJob = null;
-                _capturePlc?.Controller.Dispose();
-                _capturePlc = null;
-            }
+            catch (Exception ex) { AddLog($"相机连接失败：{ex.Message}", LogLevel.Error); }
         }
 
         // ── 开始 / 停止拍摄 ──────────────────────────────────────────
@@ -350,14 +320,9 @@ namespace TurntableStudio.ViewModels
                 return;
             }
 
-            var job = _captureJob;
-            if (!PlcConnected || !CameraConnected || job == null)
+            if (!PlcConnected || !CameraConnected)
             {
                 AddLog("请先连接 PLC 与相机", LogLevel.Warning); return;
-            }
-            if (_capturePlc?.PlcIp != _connectedPlcIp)
-            {
-                AddLog("PLC 地址已更改，请重新连接相机", LogLevel.Warning); return;
             }
             if (string.IsNullOrWhiteSpace(SaveFolder))
             {
@@ -369,11 +334,25 @@ namespace TurntableStudio.ViewModels
             ProgressCurrent = 0;
             ProgressTotal   = SelectedShotCount;
 
+            _orchestrator = new CaptureOrchestrator(_turntable, _camera);
+            _orchestrator.Progress += (_, e) => UI(() =>
+            {
+                ProgressCurrent = e.Current;
+                ProgressTotal   = e.Total;
+            });
+            _orchestrator.Log += (_, msg) =>
+            {
+                var level = msg.StartsWith("  ✓") ? LogLevel.Success
+                           : msg.StartsWith("  ✗") || msg.StartsWith("✗") ? LogLevel.Error
+                           : msg.StartsWith("  ⚠") || msg.StartsWith("⚠") ? LogLevel.Warning
+                           : LogLevel.Info;
+                AddLog(msg, level);
+            };
+
             try
             {
                 AddLog($"开始精拍 {SelectedShotCount} 张 → {SaveFolder}", LogLevel.Info);
-                await job.RunAsync(SelectedShotCount, SaveFolder, "Shot",
-                    TurntableSpeed, TurntablePulse, TurntableAccelDecel, _captureCts.Token);
+                await _orchestrator.RunAsync(SelectedShotCount, SaveFolder, "Shot", _captureCts.Token);
                 AddLog($"拍摄完成，共 {ProgressCurrent} 张", LogLevel.Success);
             }
             catch (OperationCanceledException) { AddLog("拍摄已取消", LogLevel.Warning); }
@@ -390,61 +369,41 @@ namespace TurntableStudio.ViewModels
         // ── 实时取景 ─────────────────────────────────────────────────
         private async Task ToggleLiveViewAsync()
         {
-            var job = _captureJob;
-            if (!CameraConnected || job == null) { AddLog("请先连接相机", LogLevel.Warning); return; }
+            if (!CameraConnected) { AddLog("请先连接相机", LogLevel.Warning); return; }
 
-            try
+            if (LiveViewActive)
             {
-                if (LiveViewActive)
-                {
-                    StopLiveView();
-                    AddLog("实时取景已关闭", LogLevel.Info);
-                    return;
-                }
-
-                job.SubscribeLiveFrame(OnLiveFrame);
-                await job.StartLiveViewAsync();
-                LiveViewActive = true;
-                AddLog("实时取景已开启", LogLevel.Success);
-                RefreshStepStates();
+                _liveViewTimer?.Stop();
+                _liveViewTimer?.Dispose();
+                _liveViewTimer = null;
+                // 新 ABI 无 StopLiveView
+                LiveViewActive  = false;
+                LiveViewImage   = null;
+                AddLog("实时取景已关闭", LogLevel.Info);
             }
-            catch (Exception ex)
+            else
             {
-                job.UnsubscribeLiveFrame(OnLiveFrame);
-                AddLog($"实时取景失败：{ex.Message}", LogLevel.Error);
-            }
-        }
-
-        private void StopLiveView()
-        {
-            if (!LiveViewActive) return;
-
-            _captureJob?.UnsubscribeLiveFrame(OnLiveFrame);
-            try
-            {
-                _captureJob?.StopLiveView();
-            }
-            finally
-            {
-                LiveViewActive = false;
-                LiveViewImage = null;
+                // 新 ABI 无 StartLiveView，直接启动轮询
+                LiveViewActive  = true;
+                _liveViewTimer  = new System.Timers.Timer(100);
+                _liveViewTimer.Elapsed += (_, _) => RefreshLiveView();
+                _liveViewTimer.Start();
+                AddLog("实时取景已开启（10fps）", LogLevel.Success);
                 RefreshStepStates();
             }
         }
 
-        private void OnLiveFrame(object? sender, LiveFrameEventArgs frame)
+        private void RefreshLiveView()
         {
-            byte[]? jpeg = frame.JpegBytes;
+            byte[]? jpeg = _camera.GetLiveViewJpeg();
             if (jpeg == null || jpeg.Length == 0) return;
             UI(() =>
             {
-                if (!LiveViewActive) return;
                 try
                 {
-                    using var stream = new MemoryStream(jpeg);
                     var bmp = new BitmapImage();
                     bmp.BeginInit();
-                    bmp.StreamSource    = stream;
+                    bmp.StreamSource    = new MemoryStream(jpeg);
                     bmp.CacheOption     = BitmapCacheOption.OnLoad;
                     bmp.EndInit();
                     bmp.Freeze();
@@ -599,13 +558,11 @@ namespace TurntableStudio.ViewModels
         {
             if (_disposed) return;
             _disposed = true;
+            _liveViewTimer?.Dispose();
             _angleTimer?.Dispose();
-            _captureCts?.Cancel();
             _captureCts?.Dispose();
-            _captureCts = null;
-            _captureJob?.UnsubscribeLiveFrame(OnLiveFrame);
-            try { ReleaseCaptureJob(); }
-            finally { _turntable.Dispose(); }
+            _camera.Dispose();
+            _turntable.Dispose();
         }
     }
 
