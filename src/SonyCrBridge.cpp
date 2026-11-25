@@ -698,12 +698,30 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_SetSaveInfo(const char* path, const char* p
 
     try
     {
-        // SCRSDK::SetSaveInfo takes non-const CrChar* (char*) for path and prefix
+        // CrChar = wchar_t on Windows — convert UTF-8 path/prefix to wide strings
+#ifdef _WIN32
+        auto toWide = [](const char* s) -> std::wstring {
+            if (!s || !s[0]) return {};
+            const int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, nullptr, 0);
+            if (n <= 0) return {};
+            std::wstring w(static_cast<size_t>(n), L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, s, -1, w.data(), n);
+            return w;
+        };
+        std::wstring wPath   = toWide(path);
+        std::wstring wPrefix = toWide(prefix != nullptr ? prefix : "Shot");
+        const CrError result = SCRSDK::SetSaveInfo(
+            state.deviceHandle,
+            const_cast<CrChar*>(wPath.c_str()),
+            const_cast<CrChar*>(wPrefix.c_str()),
+            startNo);
+#else
         const CrError result = SCRSDK::SetSaveInfo(
             state.deviceHandle,
             const_cast<CrChar*>(path),
-            prefix != nullptr ? const_cast<CrChar*>(prefix) : const_cast<CrChar*>("Shot"),
+            const_cast<CrChar*>(prefix != nullptr ? prefix : "Shot"),
             startNo);
+#endif
         if (result != CrError_None)
         {
             state.SetSdkError("SetSaveInfo", result);
