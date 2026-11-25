@@ -1,6 +1,7 @@
 #include "SonyCrBridge.h"
 
 #include <CameraRemote_SDK.h>
+#include <IDeviceCallback.h>
 
 #include <algorithm>
 #include <chrono>
@@ -697,12 +698,8 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Disconnect(void)
     {
         if (state.liveView)
         {
-            const CrError stopResult = SCRSDK::StopLiveView(state.deviceHandle);
+            // SDK v2.02 has no StopLiveView API; just mark inactive.
             state.liveView = false;
-            if (stopResult != CrError_None)
-            {
-                state.SetSdkError("StopLiveView", stopResult);
-            }
         }
 
         bool alreadyDisconnected = false;
