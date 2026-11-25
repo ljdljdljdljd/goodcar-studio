@@ -2,10 +2,12 @@ using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -29,6 +31,32 @@ namespace TurntableStudio.ViewModels
     }
 
     public enum LogLevel { Info, Success, Error, Warning }
+
+    public sealed class InvertBoolConverter : IValueConverter
+    {
+        public static readonly InvertBoolConverter Instance = new();
+        public object Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+            => value is bool b ? !b : false;
+        public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+            => value is bool b ? !b : false;
+    }
+
+    public sealed class GreaterThanZeroConverter : IValueConverter
+    {
+        public static readonly GreaterThanZeroConverter Instance = new();
+        public object Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+            => value is int count && count > 0;
+        public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+            => throw new NotImplementedException();
+    }
+
+    public sealed class ShotThumbnailItem
+    {
+        public int ShotNumber { get; set; }
+        public string AngleText { get; set; } = string.Empty;
+        public BitmapImage? Thumbnail { get; set; }
+        public string NumberText => $"{ShotNumber:D3}";
+    }
 
     public sealed class MainViewModel : INotifyPropertyChanged
     {
@@ -212,6 +240,16 @@ namespace TurntableStudio.ViewModels
         // ── 日志流 ───────────────────────────────────────────────────
         public ObservableCollection<LogEntry> LogEntries { get; } = new();
 
+        // ── 缩略图预览 ───────────────────────────────────────────────
+        public ObservableCollection<ShotThumbnailItem> ShotThumbnails { get; } = new();
+
+        private ShotThumbnailItem? _latestShot;
+        public ShotThumbnailItem? LatestShot
+        {
+            get => _latestShot;
+            private set => Set(ref _latestShot, value);
+        }
+
         // ── 转盘手动控制属性 ────────────────────────────────────────────
         private ushort _turntableSpeed = 230;
         public ushort TurntableSpeed { get => _turntableSpeed; set => Set(ref _turntableSpeed, value); }
@@ -224,6 +262,9 @@ namespace TurntableStudio.ViewModels
 
         private bool _isForwardDirection = true;
         public bool IsForwardDirection { get => _isForwardDirection; set => Set(ref _isForwardDirection, value); }
+
+        private double _targetAngle = 90;
+        public double TargetAngle { get => _targetAngle; set => Set(ref _targetAngle, value); }
 
         // ── 守卫 ─────────────────────────────────────────────────────
         public bool CanStartCapture => !_closing && (IsCapturing ||
@@ -242,6 +283,8 @@ namespace TurntableStudio.ViewModels
         public ICommand GoHomeCommand        { get; }
         public ICommand ManualForwardCommand { get; }
         public ICommand ManualReverseCommand { get; }
+        public ICommand MoveForwardCommand   { get; }
+        public ICommand MoveReverseCommand   { get; }
 
         public MainViewModel() : this(null) { }
 
@@ -261,6 +304,8 @@ namespace TurntableStudio.ViewModels
             GoHomeCommand         = new AsyncRelayCommand(() => RunDeviceAsync(GoHomeAsync));
             ManualForwardCommand  = new AsyncRelayCommand(() => RunDeviceAsync(() => StartRotationAsync(true)));
             ManualReverseCommand  = new AsyncRelayCommand(() => RunDeviceAsync(() => StartRotationAsync(false)));
+            MoveForwardCommand    = new AsyncRelayCommand(() => RunDeviceAsync(() => MoveToAngleAsync(true)));
+            MoveReverseCommand    = new AsyncRelayCommand(() => RunDeviceAsync(() => MoveToAngleAsync(false)));
         }
 
         private void RefreshDeviceGuards()
@@ -392,6 +437,7 @@ namespace TurntableStudio.ViewModels
                 AddLog("请先指定保存目录", LogLevel.Warning); return;
             }
 
+            UI(() => ShotThumbnails.Clear());
             ProgressCurrent = 0;
             ProgressTotal   = SelectedShotCount;
 
@@ -400,6 +446,19 @@ namespace TurntableStudio.ViewModels
             {
                 ProgressCurrent = e.Current;
                 ProgressTotal   = e.Total;
+
+                try
+                {
+                    var runFolder = Directory.GetDirectories(SaveFolder, "run_*")
+                        .OrderByDescending(d => Directory.GetCreationTime(d)).FirstOrDefault();
+                    if (runFolder != null && !string.IsNullOrEmpty(e.FileName))
+                    {
+                        string fullPath = Path.Combine(runFolder, e.FileName);
+                        double angle = (e.Current * 360.0 / e.Total) % 360.0;
+                        AddShotThumbnail(e.Current, angle, fullPath);
+                    }
+                }
+                catch { /* 缩略图加载失败不影响拍摄 */ }
             });
             orchestrator.Log += (_, msg) =>
             {
@@ -591,6 +650,34 @@ namespace TurntableStudio.ViewModels
             catch (Exception ex) { AddLog($"回零失败：{ex.Message}", LogLevel.Error); }
         }
 
+        private async Task WriteParamsAsync()
+        {
+            if (!PlcConnected) { AddLog("请先连接 PLC", LogLevel.Warning); return; }
+            try
+            {
+                await Task.Run(() => _turntable.Configure(TurntableSpeed, TurntablePulse, TurntableAccelDecel));
+                AddLog($"参数已写入：速度 {TurntableSpeed} / 脉冲 {TurntablePulse} / 加减速 {TurntableAccelDecel} ms", LogLevel.Success);
+            }
+            catch (Exception ex) { AddLog($"写入参数失败：{ex.Message}", LogLevel.Error); }
+        }
+
+        private async Task MoveToAngleAsync(bool forward)
+        {
+            if (!PlcConnected) { AddLog("请先连接 PLC", LogLevel.Warning); return; }
+            if (TargetAngle < 0 || TargetAngle >= 360)
+            {
+                AddLog("目标角度必须在 0-360° 范围内", LogLevel.Warning);
+                return;
+            }
+            try
+            {
+                _manualMotionMayBeActive = true;
+                await Task.Run(() => _turntable.MoveToWithDirection(TargetAngle, forward));
+                AddLog($"已启动转盘移动到 {TargetAngle:F1}° ({(forward ? "正转" : "反转")})", LogLevel.Success);
+            }
+            catch (Exception ex) { AddLog($"移动到目标角度失败：{ex.Message}", LogLevel.Error); }
+        }
+
         // ── 彩色日志追加 ─────────────────────────────────────────────
         private void AddLog(string message, LogLevel level)
         {
@@ -606,6 +693,34 @@ namespace TurntableStudio.ViewModels
                 while (LogEntries.Count > 200)
                     LogEntries.RemoveAt(LogEntries.Count - 1);
             });
+        }
+
+        // ── 缩略图追加 ───────────────────────────────────────────────
+        public void AddShotThumbnail(int shotNumber, double angle, string filePath)
+        {
+            if (!File.Exists(filePath)) return;
+            try
+            {
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.UriSource = new Uri(filePath, UriKind.Absolute);
+                bmp.DecodePixelWidth = 160;
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                var item = new ShotThumbnailItem
+                {
+                    ShotNumber = shotNumber,
+                    AngleText = $"{angle:F1}°",
+                    Thumbnail = bmp
+                };
+                UI(() =>
+                {
+                    ShotThumbnails.Add(item);
+                    LatestShot = item;
+                });
+            }
+            catch { /* 缩略图加载失败不影响拍摄 */ }
         }
 
         private static void UI(Action action)

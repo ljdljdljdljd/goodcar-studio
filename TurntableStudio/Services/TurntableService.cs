@@ -89,6 +89,14 @@ namespace TurntableStudio.Services
             _controller!.Configure(speed, pulse, accelDecel);
         }
 
+        public void MoveToWithDirection(double targetDeg, bool forward)
+        {
+            EnsureConnected();
+            _controller!.SetDirection(forward ? MovementDirection.Forward : MovementDirection.Reverse);
+            _controller!.WriteTargetAngle((ushort)targetDeg);
+            _controller!.Start();
+        }
+
         public void Dispose()
         {
             if (_disposed) return;
