@@ -7,11 +7,28 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using TurntableStudio.Services;
 
 namespace TurntableStudio.ViewModels
 {
+    public sealed class LogEntry
+    {
+        public string Time { get; set; } = string.Empty;
+        public string Message { get; set; } = string.Empty;
+        public LogLevel Level { get; set; }
+        public Brush Color => Level switch
+        {
+            LogLevel.Success => new SolidColorBrush(Color.FromRgb(166, 227, 161)),  // #A6E3A1
+            LogLevel.Error   => new SolidColorBrush(Color.FromRgb(243, 139, 168)),  // #F38BA8
+            LogLevel.Warning => new SolidColorBrush(Color.FromRgb(249, 226, 175)),  // #F9E2AF
+            _                => new SolidColorBrush(Color.FromRgb(166, 173, 200)),  // #A6ADC8
+        };
+    }
+
+    public enum LogLevel { Info, Success, Error, Warning }
+
     public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         private readonly TurntableService _turntable = new();
@@ -19,21 +36,83 @@ namespace TurntableStudio.ViewModels
         private CaptureOrchestrator? _orchestrator;
         private CancellationTokenSource? _captureCts;
         private System.Timers.Timer? _liveViewTimer;
+        private System.Timers.Timer? _angleTimer;
+        private bool _disposed;
 
-        // ── 状态属性 ────────────────────────────────────────────────
+        // ── 连接状态 ─────────────────────────────────────────────────
         private bool _plcConnected;
-        public bool PlcConnected { get => _plcConnected; private set => Set(ref _plcConnected, value); }
+        public bool PlcConnected
+        {
+            get => _plcConnected;
+            private set
+            {
+                Set(ref _plcConnected, value);
+                OnPropertyChanged(nameof(PlcStatusText));
+                OnPropertyChanged(nameof(PlcStatusColor));
+                OnPropertyChanged(nameof(ConnectPlcLabel));
+                OnPropertyChanged(nameof(Step1Done));
+                OnPropertyChanged(nameof(CanStartCapture));
+                RefreshStepStates();
+            }
+        }
 
         private bool _cameraConnected;
-        public bool CameraConnected { get => _cameraConnected; private set => Set(ref _cameraConnected, value); }
+        public bool CameraConnected
+        {
+            get => _cameraConnected;
+            private set
+            {
+                Set(ref _cameraConnected, value);
+                OnPropertyChanged(nameof(CameraStatusText));
+                OnPropertyChanged(nameof(CameraStatusColor));
+                OnPropertyChanged(nameof(ConnectCameraLabel));
+                OnPropertyChanged(nameof(Step2Done));
+                OnPropertyChanged(nameof(CanStartCapture));
+                RefreshStepStates();
+            }
+        }
 
         private bool _isCapturing;
-        public bool IsCapturing { get => _isCapturing; private set { Set(ref _isCapturing, value); OnPropertyChanged(nameof(StartStopLabel)); } }
+        public bool IsCapturing
+        {
+            get => _isCapturing;
+            private set
+            {
+                Set(ref _isCapturing, value);
+                OnPropertyChanged(nameof(StartStopLabel));
+                OnPropertyChanged(nameof(StartStopColor));
+                OnPropertyChanged(nameof(CanStartCapture));
+                OnPropertyChanged(nameof(CanChangeShotCount));
+            }
+        }
 
         private bool _liveViewActive;
-        public bool LiveViewActive { get => _liveViewActive; private set => Set(ref _liveViewActive, value); }
+        public bool LiveViewActive
+        {
+            get => _liveViewActive;
+            private set { Set(ref _liveViewActive, value); OnPropertyChanged(nameof(LiveViewLabel)); }
+        }
 
-        // ── 配置属性 ────────────────────────────────────────────────
+        // ── 状态文本 ─────────────────────────────────────────────────
+        public string PlcStatusText => PlcConnected ? "已连接" : "未连接";
+        public Brush PlcStatusColor => PlcConnected
+            ? new SolidColorBrush(Color.FromRgb(166, 227, 161))
+            : new SolidColorBrush(Color.FromRgb(243, 139, 168));
+
+        public string CameraStatusText => CameraConnected ? "已连接" : "未连接";
+        public Brush CameraStatusColor => CameraConnected
+            ? new SolidColorBrush(Color.FromRgb(166, 227, 161))
+            : new SolidColorBrush(Color.FromRgb(243, 139, 168));
+
+        public string ConnectPlcLabel    => PlcConnected ? "断开 PLC" : "连接 PLC";
+        public string ConnectCameraLabel => CameraConnected ? "断开相机" : "连接相机";
+        public string LiveViewLabel      => LiveViewActive ? "关闭取景" : "开启取景";
+        public string StartStopLabel     => IsCapturing ? "停止拍摄" : "开始拍摄";
+        public Brush  StartStopColor     => IsCapturing
+            ? new SolidColorBrush(Color.FromRgb(243, 139, 168))
+            : new SolidColorBrush(Color.FromRgb(166, 227, 161));
+
+        // ── 配置 ─────────────────────────────────────────────────────
         private string _plcIp = "192.168.1.111";
         public string PlcIp { get => _plcIp; set => Set(ref _plcIp, value); }
 
@@ -44,161 +123,221 @@ namespace TurntableStudio.ViewModels
         public int SelectedShotCount
         {
             get => _selectedShotCount;
-            set { if (!IsCapturing) Set(ref _selectedShotCount, value); }
+            set
+            {
+                if (!IsCapturing) Set(ref _selectedShotCount, value);
+                OnPropertyChanged(nameof(StepAngle));
+            }
+        }
+        public bool CanChangeShotCount => !IsCapturing;
+        public ObservableCollection<int> ShotCountOptions { get; } = new() { 72, 36 };
+        public string StepAngle => $"{360.0 / _selectedShotCount:F1}° / 张";
+
+        // ── 角度 ─────────────────────────────────────────────────────
+        private double _currentAngle;
+        public double CurrentAngle
+        {
+            get => _currentAngle;
+            private set
+            {
+                Set(ref _currentAngle, value);
+                OnPropertyChanged(nameof(CurrentAngleText));
+                OnPropertyChanged(nameof(DialRotation));
+            }
+        }
+        public string CurrentAngleText => $"{_currentAngle:F1}°";
+        public double DialRotation => _currentAngle; // 供 XAML RotateTransform 使用
+
+        // ── 进度 ─────────────────────────────────────────────────────
+        private int _progressCurrent;
+        public int ProgressCurrent
+        {
+            get => _progressCurrent;
+            private set { Set(ref _progressCurrent, value); OnPropertyChanged(nameof(ProgressText)); OnPropertyChanged(nameof(ProgressPercent)); }
         }
 
-        public ObservableCollection<int> ShotCountOptions { get; } = new() { 72, 36 };
+        private int _progressTotal = 72;
+        public int ProgressTotal
+        {
+            get => _progressTotal;
+            private set { Set(ref _progressTotal, value); OnPropertyChanged(nameof(ProgressText)); OnPropertyChanged(nameof(ProgressPercent)); }
+        }
 
-        // ── 进度属性 ────────────────────────────────────────────────
-        private int _progressCurrent;
-        public int ProgressCurrent { get => _progressCurrent; private set { Set(ref _progressCurrent, value); OnPropertyChanged(nameof(ProgressText)); } }
+        public string ProgressText => _progressTotal > 0
+            ? $"{_progressCurrent} / {_progressTotal}"
+            : "—";
+        public double ProgressPercent => _progressTotal > 0
+            ? (double)_progressCurrent / _progressTotal * 100
+            : 0;
 
-        private int _progressTotal;
-        public int ProgressTotal { get => _progressTotal; private set { Set(ref _progressTotal, value); OnPropertyChanged(nameof(ProgressText)); } }
+        // ── 分步引导 ─────────────────────────────────────────────────
+        public bool Step1Done => PlcConnected;
+        public bool Step2Done => CameraConnected;
+        public bool Step3Done => LiveViewActive;
+        public bool Step4Active => PlcConnected && CameraConnected && !IsCapturing;
 
-        public string ProgressText => _progressTotal > 0 ? $"{_progressCurrent} / {_progressTotal}" : "—";
-        public string StartStopLabel => IsCapturing ? "停止拍摄" : "开始拍摄";
+        private Brush StepDoneBrush    => new SolidColorBrush(Color.FromRgb(166, 227, 161));
+        private Brush StepActiveBrush  => new SolidColorBrush(Color.FromRgb(203, 166, 247));
+        private Brush StepPendingBrush => new SolidColorBrush(Color.FromRgb(69, 71, 90));
 
-        // ── 实时取景 ────────────────────────────────────────────────
+        public Brush Step1Brush => Step1Done ? StepDoneBrush : StepActiveBrush;
+        public Brush Step2Brush => Step1Done ? (Step2Done ? StepDoneBrush : StepActiveBrush) : StepPendingBrush;
+        public Brush Step3Brush => Step2Done ? (Step3Done ? StepDoneBrush : StepActiveBrush) : StepPendingBrush;
+        public Brush Step4Brush => Step4Active ? StepActiveBrush : (IsCapturing ? StepDoneBrush : StepPendingBrush);
+
+        private void RefreshStepStates()
+        {
+            OnPropertyChanged(nameof(Step1Done));
+            OnPropertyChanged(nameof(Step2Done));
+            OnPropertyChanged(nameof(Step3Done));
+            OnPropertyChanged(nameof(Step4Active));
+            OnPropertyChanged(nameof(Step1Brush));
+            OnPropertyChanged(nameof(Step2Brush));
+            OnPropertyChanged(nameof(Step3Brush));
+            OnPropertyChanged(nameof(Step4Brush));
+        }
+
+        // ── 实时取景 ─────────────────────────────────────────────────
         private BitmapImage? _liveViewImage;
         public BitmapImage? LiveViewImage { get => _liveViewImage; private set => Set(ref _liveViewImage, value); }
 
-        // ── 日志 ────────────────────────────────────────────────────
-        private string _log = string.Empty;
-        public string Log { get => _log; private set => Set(ref _log, value); }
+        // ── 日志流 ───────────────────────────────────────────────────
+        public ObservableCollection<LogEntry> LogEntries { get; } = new();
 
-        // ── 命令 ────────────────────────────────────────────────────
-        public ICommand ConnectPlcCommand { get; }
+        // ── 守卫 ─────────────────────────────────────────────────────
+        public bool CanStartCapture => PlcConnected && CameraConnected && !IsCapturing;
+
+        // ── 命令 ─────────────────────────────────────────────────────
+        public ICommand ConnectPlcCommand    { get; }
         public ICommand ConnectCameraCommand { get; }
-        public ICommand StartStopCommand { get; }
-        public ICommand ToggleLiveViewCommand { get; }
-        public ICommand BrowseFolderCommand { get; }
+        public ICommand StartStopCommand     { get; }
+        public ICommand ToggleLiveViewCommand{ get; }
+        public ICommand BrowseFolderCommand  { get; }
 
         public MainViewModel()
         {
-            _turntable.StatusChanged += (_, msg) => AppendLog(msg);
+            _turntable.StatusChanged += (_, msg) => AddLog(msg, LogLevel.Info);
 
-            ConnectPlcCommand = new AsyncRelayCommand(ConnectPlcAsync);
-            ConnectCameraCommand = new AsyncRelayCommand(ConnectCameraAsync);
-            StartStopCommand = new AsyncRelayCommand(StartStopAsync);
+            ConnectPlcCommand     = new AsyncRelayCommand(ConnectPlcAsync);
+            ConnectCameraCommand  = new AsyncRelayCommand(ConnectCameraAsync);
+            StartStopCommand      = new AsyncRelayCommand(StartStopAsync);
             ToggleLiveViewCommand = new AsyncRelayCommand(ToggleLiveViewAsync);
-            BrowseFolderCommand = new RelayCommand(BrowseFolder);
+            BrowseFolderCommand   = new RelayCommand(BrowseFolder);
         }
 
+        // ── 连接 PLC ─────────────────────────────────────────────────
         private async Task ConnectPlcAsync()
         {
+            if (PlcConnected)
+            {
+                StopAnglePolling();
+                _turntable.Disconnect();
+                PlcConnected = false;
+                AddLog("PLC 已断开", LogLevel.Warning);
+                return;
+            }
+            AddLog($"正在连接 PLC {PlcIp}…", LogLevel.Info);
             try
             {
-                if (PlcConnected)
-                {
-                    _turntable.Disconnect();
-                    PlcConnected = false;
-                    AppendLog("PLC 已断开");
-                }
-                else
-                {
-                    AppendLog($"正在连接 PLC {PlcIp}…");
-                    await Task.Run(() => _turntable.Connect(PlcIp));
-                    PlcConnected = true;
-                    AppendLog("✓ PLC 已连接");
-                }
+                await Task.Run(() => _turntable.Connect(PlcIp));
+                PlcConnected = true;
+                AddLog("PLC 连接成功", LogLevel.Success);
+                StartAnglePolling();
             }
-            catch (Exception ex) { AppendLog($"✗ PLC 连接失败：{ex.Message}"); }
+            catch (Exception ex) { AddLog($"PLC 连接失败：{ex.Message}", LogLevel.Error); }
         }
 
+        // ── 连接相机 ─────────────────────────────────────────────────
         private async Task ConnectCameraAsync()
         {
+            if (CameraConnected)
+            {
+                _camera.Disconnect();
+                CameraConnected = false;
+                AddLog("相机已断开", LogLevel.Warning);
+                return;
+            }
+            AddLog("初始化相机 SDK…", LogLevel.Info);
             try
             {
-                if (CameraConnected)
+                string desc = string.Empty;
+                int count = 0;
+                await Task.Run(() =>
                 {
-                    _camera.Disconnect();
-                    CameraConnected = false;
-                    AppendLog("相机已断开");
-                }
-                else
-                {
-                    AppendLog("正在初始化相机 SDK…");
-                    await Task.Run(() =>
-                    {
-                        _camera.Initialize();
-                        int count = _camera.GetDeviceCount();
-                        if (count == 0) throw new InvalidOperationException("未发现已连接的索尼相机，请检查 USB 连接与 PC 遥控设置");
-                        AppendLog($"发现 {count} 台相机，正在连接…");
-                        string desc = _camera.GetDeviceDescriptor(0);
-                        AppendLog($"  设备信息：{desc}");
-                        _camera.Connect(0);
-                    });
-                    CameraConnected = true;
-                    AppendLog("✓ 相机已连接");
-                }
+                    _camera.Initialize();
+                    count = _camera.GetDeviceCount();
+                    if (count == 0)
+                        throw new InvalidOperationException("未发现索尼相机，请检查 USB 连接并确认已开启 PC 遥控模式");
+                    desc = _camera.GetDeviceDescriptor(0);
+                    _camera.Connect(0);
+                });
+                CameraConnected = true;
+                AddLog($"相机连接成功（共 {count} 台）", LogLevel.Success);
+                AddLog($"设备：{desc}", LogLevel.Info);
             }
-            catch (Exception ex) { AppendLog($"✗ 相机连接失败：{ex.Message}"); }
+            catch (Exception ex) { AddLog($"相机连接失败：{ex.Message}", LogLevel.Error); }
         }
 
+        // ── 开始 / 停止拍摄 ──────────────────────────────────────────
         private async Task StartStopAsync()
         {
             if (IsCapturing)
             {
                 _captureCts?.Cancel();
-                AppendLog("⏹ 用户停止拍摄");
+                AddLog("正在停止拍摄…", LogLevel.Warning);
                 return;
             }
 
             if (!PlcConnected || !CameraConnected)
             {
-                AppendLog("⚠ 请先连接 PLC 与相机");
-                return;
+                AddLog("请先连接 PLC 与相机", LogLevel.Warning); return;
             }
-
             if (string.IsNullOrWhiteSpace(SaveFolder))
             {
-                AppendLog("⚠ 请指定保存目录");
-                return;
+                AddLog("请先指定保存目录", LogLevel.Warning); return;
             }
 
-            _captureCts = new CancellationTokenSource();
-            IsCapturing = true;
+            _captureCts   = new CancellationTokenSource();
+            IsCapturing   = true;
             ProgressCurrent = 0;
-            ProgressTotal = SelectedShotCount;
+            ProgressTotal   = SelectedShotCount;
 
             _orchestrator = new CaptureOrchestrator(_turntable, _camera);
-            _orchestrator.Progress += (_, e) =>
+            _orchestrator.Progress += (_, e) => UI(() =>
             {
-                Application.Current.Dispatcher.Invoke(() =>
-                {
-                    ProgressCurrent = e.Current;
-                    ProgressTotal = e.Total;
-                });
+                ProgressCurrent = e.Current;
+                ProgressTotal   = e.Total;
+            });
+            _orchestrator.Log += (_, msg) =>
+            {
+                var level = msg.StartsWith("  ✓") ? LogLevel.Success
+                           : msg.StartsWith("  ✗") || msg.StartsWith("✗") ? LogLevel.Error
+                           : msg.StartsWith("  ⚠") || msg.StartsWith("⚠") ? LogLevel.Warning
+                           : LogLevel.Info;
+                AddLog(msg, level);
             };
-            _orchestrator.Log += (_, msg) => AppendLog(msg);
 
             try
             {
-                AppendLog($"▶ 开始精拍：{SelectedShotCount} 张 → {SaveFolder}");
-                await _orchestrator.RunAsync(SelectedShotCount, SaveFolder,
-                    "Shot", _captureCts.Token);
-                AppendLog($"✅ 拍摄完成，共 {ProgressCurrent} 张");
+                AddLog($"开始精拍 {SelectedShotCount} 张 → {SaveFolder}", LogLevel.Info);
+                await _orchestrator.RunAsync(SelectedShotCount, SaveFolder, "Shot", _captureCts.Token);
+                AddLog($"拍摄完成，共 {ProgressCurrent} 张", LogLevel.Success);
             }
-            catch (OperationCanceledException)
-            {
-                AppendLog("⏹ 拍摄已取消");
-            }
-            catch (Exception ex)
-            {
-                AppendLog($"✗ 拍摄出错：{ex.Message}");
-            }
+            catch (OperationCanceledException) { AddLog("拍摄已取消", LogLevel.Warning); }
+            catch (Exception ex)               { AddLog($"拍摄出错：{ex.Message}", LogLevel.Error); }
             finally
             {
                 IsCapturing = false;
                 _captureCts?.Dispose();
                 _captureCts = null;
+                RefreshStepStates();
             }
         }
 
+        // ── 实时取景 ─────────────────────────────────────────────────
         private async Task ToggleLiveViewAsync()
         {
-            if (!CameraConnected) { AppendLog("⚠ 请先连接相机"); return; }
+            if (!CameraConnected) { AddLog("请先连接相机", LogLevel.Warning); return; }
 
             if (LiveViewActive)
             {
@@ -206,18 +345,19 @@ namespace TurntableStudio.ViewModels
                 _liveViewTimer?.Dispose();
                 _liveViewTimer = null;
                 _camera.StopLiveView();
-                LiveViewActive = false;
-                LiveViewImage = null;
-                AppendLog("实时取景已关闭");
+                LiveViewActive  = false;
+                LiveViewImage   = null;
+                AddLog("实时取景已关闭", LogLevel.Info);
             }
             else
             {
                 await Task.Run(() => _camera.StartLiveView());
-                LiveViewActive = true;
-                _liveViewTimer = new System.Timers.Timer(100); // 10fps
+                LiveViewActive  = true;
+                _liveViewTimer  = new System.Timers.Timer(100);
                 _liveViewTimer.Elapsed += (_, _) => RefreshLiveView();
                 _liveViewTimer.Start();
-                AppendLog("实时取景已开启");
+                AddLog("实时取景已开启（10fps）", LogLevel.Success);
+                RefreshStepStates();
             }
         }
 
@@ -225,41 +365,79 @@ namespace TurntableStudio.ViewModels
         {
             byte[]? jpeg = _camera.GetLiveViewJpeg(500);
             if (jpeg == null || jpeg.Length == 0) return;
-            Application.Current.Dispatcher.Invoke(() =>
+            UI(() =>
             {
                 try
                 {
                     var bmp = new BitmapImage();
                     bmp.BeginInit();
-                    bmp.StreamSource = new MemoryStream(jpeg);
-                    bmp.CacheOption = BitmapCacheOption.OnLoad;
+                    bmp.StreamSource    = new MemoryStream(jpeg);
+                    bmp.CacheOption     = BitmapCacheOption.OnLoad;
                     bmp.EndInit();
                     bmp.Freeze();
                     LiveViewImage = bmp;
                 }
-                catch { /* 丢帧，不抛出 */ }
+                catch { }
             });
         }
 
+        // ── 角度轮询 ─────────────────────────────────────────────────
+        private void StartAnglePolling()
+        {
+            _angleTimer = new System.Timers.Timer(300);
+            _angleTimer.Elapsed += (_, _) =>
+            {
+                if (!PlcConnected) return;
+                try
+                {
+                    double angle = _turntable.ReadAngle();
+                    UI(() => CurrentAngle = angle);
+                }
+                catch { }
+            };
+            _angleTimer.Start();
+        }
+
+        private void StopAnglePolling()
+        {
+            _angleTimer?.Stop();
+            _angleTimer?.Dispose();
+            _angleTimer = null;
+        }
+
+        // ── 浏览文件夹 ───────────────────────────────────────────────
         private void BrowseFolder(object? _)
         {
             using var dialog = new System.Windows.Forms.FolderBrowserDialog
             {
-                Description = "选择照片保存目录",
+                Description  = "选择照片保存目录",
                 SelectedPath = SaveFolder,
             };
             if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
                 SaveFolder = dialog.SelectedPath;
         }
 
-        private void AppendLog(string message)
+        // ── 彩色日志追加 ─────────────────────────────────────────────
+        private void AddLog(string message, LogLevel level)
         {
-            Application.Current?.Dispatcher.Invoke(() =>
+            UI(() =>
             {
-                Log = $"[{DateTime.Now:HH:mm:ss}] {message}\n{Log}";
+                LogEntries.Insert(0, new LogEntry
+                {
+                    Time    = DateTime.Now.ToString("HH:mm:ss"),
+                    Message = message,
+                    Level   = level,
+                });
+                // 只保留最近 200 条
+                while (LogEntries.Count > 200)
+                    LogEntries.RemoveAt(LogEntries.Count - 1);
             });
         }
 
+        private static void UI(Action action)
+            => Application.Current?.Dispatcher.Invoke(action);
+
+        // ── INotifyPropertyChanged ───────────────────────────────────
         public event PropertyChangedEventHandler? PropertyChanged;
         private void OnPropertyChanged([CallerMemberName] string? name = null)
             => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
@@ -272,14 +450,17 @@ namespace TurntableStudio.ViewModels
 
         public void Dispose()
         {
+            if (_disposed) return;
+            _disposed = true;
             _liveViewTimer?.Dispose();
+            _angleTimer?.Dispose();
             _captureCts?.Dispose();
             _camera.Dispose();
             _turntable.Dispose();
         }
     }
 
-    // ── 轻量 RelayCommand 实现 ────────────────────────────────────
+    // ── RelayCommand ─────────────────────────────────────────────────
     public sealed class AsyncRelayCommand : ICommand
     {
         private readonly Func<Task> _execute;
@@ -289,9 +470,15 @@ namespace TurntableStudio.ViewModels
         public bool CanExecute(object? _) => !_running;
         public async void Execute(object? _)
         {
-            _running = true; CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+            if (_running) return;
+            _running = true;
+            CanExecuteChanged?.Invoke(this, EventArgs.Empty);
             try { await _execute(); }
-            finally { _running = false; CanExecuteChanged?.Invoke(this, EventArgs.Empty); }
+            finally
+            {
+                _running = false;
+                CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+            }
         }
     }
 
