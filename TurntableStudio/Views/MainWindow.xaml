@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:TurntableStudio.ViewModels"
-        Title="GoodCar 影棚拍摄控制台" Height="720" Width="1100"
+        Title="GoodCar 影棚拍摄系统" Height="720" Width="1100" MinHeight="720" MinWidth="1100"
         Background="#1E1E2E" Foreground="#CDD6F4"
         WindowStartupLocation="CenterScreen">
 
@@ -11,200 +11,353 @@
     </Window.DataContext>
 
     <Window.Resources>
-        <!-- 状态圆点 -->
+        <!-- 颜色令牌 (Catppuccin Mocha) -->
+        <SolidColorBrush x:Key="BgBase" Color="#1E1E2E"/>
+        <SolidColorBrush x:Key="BgSecondary" Color="#181825"/>
+        <SolidColorBrush x:Key="BgCard" Color="#313244"/>
+        <SolidColorBrush x:Key="Border" Color="#45475A"/>
+        <SolidColorBrush x:Key="TextPrimary" Color="#CDD6F4"/>
+        <SolidColorBrush x:Key="TextSecondary" Color="#A6ADC8"/>
+        <SolidColorBrush x:Key="BrandPurple" Color="#CBA6F7"/>
+        <SolidColorBrush x:Key="SuccessGreen" Color="#A6E3A1"/>
+        <SolidColorBrush x:Key="ErrorRed" Color="#F38BA8"/>
+        <SolidColorBrush x:Key="WarningYellow" Color="#F9E2AF"/>
+
+        <!-- 状态圆点样式 -->
         <Style x:Key="StatusDot" TargetType="Ellipse">
             <Setter Property="Width" Value="12"/>
             <Setter Property="Height" Value="12"/>
-            <Setter Property="Margin" Value="4,0"/>
+            <Setter Property="Margin" Value="6,0"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
-        <!-- 操作按钮 -->
+
+        <!-- 操作按钮样式 -->
         <Style x:Key="ActionBtn" TargetType="Button">
-            <Setter Property="Padding" Value="16,8"/>
-            <Setter Property="Margin" Value="4"/>
-            <Setter Property="Background" Value="#313244"/>
-            <Setter Property="Foreground" Value="#CDD6F4"/>
-            <Setter Property="BorderBrush" Value="#45475A"/>
+            <Setter Property="Padding" Value="16,10"/>
+            <Setter Property="Margin" Value="6,0"/>
+            <Setter Property="Background" Value="{StaticResource BgCard}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
-        <!-- 标签 -->
+
+        <!-- 标签样式 -->
         <Style x:Key="Label" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#A6ADC8"/>
+            <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
             <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Margin" Value="0,6,0,2"/>
+            <Setter Property="Margin" Value="0,8,0,4"/>
         </Style>
-        <!-- 输入框 -->
+
+        <!-- 输入框样式 -->
         <Style x:Key="Input" TargetType="TextBox">
-            <Setter Property="Background" Value="#313244"/>
-            <Setter Property="Foreground" Value="#CDD6F4"/>
-            <Setter Property="BorderBrush" Value="#45475A"/>
+            <Setter Property="Background" Value="{StaticResource BgCard}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="Padding" Value="8,6"/>
             <Setter Property="FontSize" Value="13"/>
+        </Style>
+
+        <!-- 分步引导卡片样式 -->
+        <Style x:Key="StepBox" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource BgCard}"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
         </Style>
     </Window.Resources>
 
     <DockPanel>
-        <!-- ── 顶部状态栏 ── -->
-        <Border DockPanel.Dock="Top" Background="#181825" Padding="12,8">
-            <StackPanel Orientation="Horizontal">
-                <TextBlock Text="PLC" VerticalAlignment="Center" FontWeight="Bold"/>
-                <Ellipse Style="{StaticResource StatusDot}">
-                    <Ellipse.Fill>
-                        <SolidColorBrush Color="{Binding PlcConnected,
-                            Converter={x:Static vm:BoolToColorConverter.Instance},
-                            ConverterParameter='#A6E3A1|#F38BA8'}"/>
-                    </Ellipse.Fill>
-                </Ellipse>
-                <TextBlock Text="{Binding PlcConnected, StringFormat='{}  {0}'}"
-                           VerticalAlignment="Center" Margin="0,0,24,0"/>
+        <!-- ══════════════════════════════════════════════════════════════
+             顶部状态栏：PLC状态 | 相机状态 | 右对齐标题
+             ══════════════════════════════════════════════════════════════ -->
+        <Border DockPanel.Dock="Top" Background="{StaticResource BgSecondary}" Padding="16,10" BorderBrush="{StaticResource Border}" BorderThickness="0,0,0,1">
+            <Grid>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                    <TextBlock Text="PLC" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,6,0"/>
+                    <Ellipse Fill="{Binding PlcStatusColor}" Style="{StaticResource StatusDot}"/>
+                    <TextBlock Text="{Binding PlcStatusText}" VerticalAlignment="Center" Foreground="{StaticResource TextSecondary}" Margin="0,0,32,0"/>
 
-                <TextBlock Text="相机" VerticalAlignment="Center" FontWeight="Bold"/>
-                <Ellipse Style="{StaticResource StatusDot}">
-                    <Ellipse.Fill>
-                        <SolidColorBrush Color="{Binding CameraConnected,
-                            Converter={x:Static vm:BoolToColorConverter.Instance},
-                            ConverterParameter='#A6E3A1|#F38BA8'}"/>
-                    </Ellipse.Fill>
-                </Ellipse>
-                <TextBlock Text="{Binding CameraConnected, StringFormat='{}  {0}'}"
-                           VerticalAlignment="Center"/>
-
-                <TextBlock Text="GoodCar 影棚拍摄系统 v1.0"
-                           HorizontalAlignment="Right" Foreground="#6C7086"
-                           VerticalAlignment="Center" Margin="40,0,0,0"/>
-            </StackPanel>
+                    <TextBlock Text="相机" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,6,0"/>
+                    <Ellipse Fill="{Binding CameraStatusColor}" Style="{StaticResource StatusDot}"/>
+                    <TextBlock Text="{Binding CameraStatusText}" VerticalAlignment="Center" Foreground="{StaticResource TextSecondary}"/>
+                </StackPanel>
+                <TextBlock Text="GoodCar 影棚拍摄系统 v1.0" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="#6C7086" FontSize="12"/>
+            </Grid>
         </Border>
 
-        <!-- ── 底部操作栏 ── -->
-        <Border DockPanel.Dock="Bottom" Background="#181825" Padding="12,8">
+        <!-- ══════════════════════════════════════════════════════════════
+             底部操作栏：[连接PLC] [连接相机] [实时取景] ║ [开始/停止拍摄]
+             ══════════════════════════════════════════════════════════════ -->
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource BgSecondary}" Padding="16,12" BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,0">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                <Button Content="{Binding PlcConnected, Converter={x:Static vm:BoolToTextConverter.Instance},
-                        ConverterParameter='断开PLC|连接PLC'}"
-                        Command="{Binding ConnectPlcCommand}"
-                        Style="{StaticResource ActionBtn}"/>
-                <Button Content="{Binding CameraConnected, Converter={x:Static vm:BoolToTextConverter.Instance},
-                        ConverterParameter='断开相机|连接相机'}"
-                        Command="{Binding ConnectCameraCommand}"
-                        Style="{StaticResource ActionBtn}"/>
-                <Button Content="{Binding LiveViewActive, Converter={x:Static vm:BoolToTextConverter.Instance},
-                        ConverterParameter='关闭取景|实时取景'}"
-                        Command="{Binding ToggleLiveViewCommand}"
-                        Style="{StaticResource ActionBtn}"/>
+                <Button Content="{Binding ConnectPlcLabel}" Command="{Binding ConnectPlcCommand}" Style="{StaticResource ActionBtn}"/>
+                <Button Content="{Binding ConnectCameraLabel}" Command="{Binding ConnectCameraCommand}" Style="{StaticResource ActionBtn}"/>
+                <Button Content="{Binding LiveViewLabel}" Command="{Binding ToggleLiveViewCommand}" Style="{StaticResource ActionBtn}"/>
+
+                <!-- 分隔线 -->
+                <Rectangle Width="2" Height="30" Fill="{StaticResource Border}" Margin="12,0"/>
+
+                <!-- 开始/停止拍摄（突出显示）-->
                 <Button Content="{Binding StartStopLabel}"
                         Command="{Binding StartStopCommand}"
-                        Style="{StaticResource ActionBtn}"
-                        Background="#313244" Foreground="#A6E3A1"
-                        FontWeight="Bold" FontSize="14" Padding="24,8"/>
+                        IsEnabled="{Binding CanStartCapture}"
+                        Background="{Binding StartStopColor}"
+                        Foreground="#1E1E2E"
+                        FontWeight="Bold" FontSize="14"
+                        Padding="28,10" Margin="6,0"
+                        BorderBrush="{StaticResource Border}" BorderThickness="1" Cursor="Hand">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Button.Template>
+                    <Button.Style>
+                        <Style TargetType="Button">
+                            <Style.Triggers>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Opacity" Value="0.4"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
             </StackPanel>
         </Border>
 
-        <!-- ── 主体区域 ── -->
+        <!-- ══════════════════════════════════════════════════════════════
+             主体区域：左 2/3 实时取景+角度表盘  |  右 1/3 控制面板
+             ══════════════════════════════════════════════════════════════ -->
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="2*"/>
-                <ColumnDefinition Width="1*" MinWidth="260"/>
+                <ColumnDefinition Width="1*" MinWidth="380"/>
             </Grid.ColumnDefinitions>
 
-            <!-- 左：实时取景预览 -->
-            <Border Grid.Column="0" Background="#11111B" Margin="8">
+            <!-- ────────────────────────────────────────────────────────
+                 左：实时取景预览 / 角度表盘（取景关闭时显示）
+                 ──────────────────────────────────────────────────────── -->
+            <Border Grid.Column="0" Background="#11111B" Margin="12">
                 <Grid>
+                    <!-- 实时取景图像 -->
                     <Image Source="{Binding LiveViewImage}" Stretch="Uniform"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    <TextBlock Text="实时取景（点击底部按钮开启）"
-                               Foreground="#45475A" FontSize="16"
-                               HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
+                           HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Image.Style>
+                            <Style TargetType="Image">
+                                <Setter Property="Visibility" Value="Visible"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding LiveViewActive}" Value="False">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Image.Style>
+                    </Image>
+
+                    <!-- 角度表盘（取景关闭时显示）-->
+                    <Canvas Width="300" Height="300" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Canvas.Style>
+                            <Style TargetType="Canvas">
                                 <Setter Property="Visibility" Value="Collapsed"/>
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding LiveViewImage}" Value="{x:Null}">
+                                    <DataTrigger Binding="{Binding LiveViewActive}" Value="False">
                                         <Setter Property="Visibility" Value="Visible"/>
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
+                        </Canvas.Style>
+
+                        <!-- 表盘底盘圆 -->
+                        <Ellipse Width="280" Height="280" Canvas.Left="10" Canvas.Top="10" Stroke="#45475A" StrokeThickness="3" Fill="#181825"/>
+
+                        <!-- 刻度线：每 30° 一个大刻度（12个），每 10° 一个小刻度（36个）-->
+                        <!-- 0° -->
+                        <Line X1="150" Y1="20" X2="150" Y2="40" Stroke="White" StrokeThickness="2"/>
+                        <TextBlock Text="0°" Canvas.Left="143" Canvas.Top="2" Foreground="White" FontSize="12" FontWeight="Bold"/>
+                        <!-- 30° -->
+                        <Line X1="221" Y1="47" X2="209" Y2="62" Stroke="White" StrokeThickness="2"/>
+                        <!-- 60° -->
+                        <Line X1="264" Y1="107" X2="249" Y2="119" Stroke="White" StrokeThickness="2"/>
+                        <!-- 90° -->
+                        <Line X1="280" Y1="150" X2="260" Y2="150" Stroke="White" StrokeThickness="2"/>
+                        <TextBlock Text="90°" Canvas.Left="285" Canvas.Top="143" Foreground="White" FontSize="12" FontWeight="Bold"/>
+                        <!-- 120° -->
+                        <Line X1="264" Y1="193" X2="249" Y2="181" Stroke="White" StrokeThickness="2"/>
+                        <!-- 150° -->
+                        <Line X1="221" Y1="253" X2="209" Y2="238" Stroke="White" StrokeThickness="2"/>
+                        <!-- 180° -->
+                        <Line X1="150" Y1="280" X2="150" Y2="260" Stroke="White" StrokeThickness="2"/>
+                        <TextBlock Text="180°" Canvas.Left="137" Canvas.Top="285" Foreground="White" FontSize="12" FontWeight="Bold"/>
+                        <!-- 210° -->
+                        <Line X1="79" Y1="253" X2="91" Y2="238" Stroke="White" StrokeThickness="2"/>
+                        <!-- 240° -->
+                        <Line X1="36" Y1="193" X2="51" Y2="181" Stroke="White" StrokeThickness="2"/>
+                        <!-- 270° -->
+                        <Line X1="20" Y1="150" X2="40" Y2="150" Stroke="White" StrokeThickness="2"/>
+                        <TextBlock Text="270°" Canvas.Left="-20" Canvas.Top="143" Foreground="White" FontSize="12" FontWeight="Bold"/>
+                        <!-- 300° -->
+                        <Line X1="36" Y1="107" X2="51" Y2="119" Stroke="White" StrokeThickness="2"/>
+                        <!-- 330° -->
+                        <Line X1="79" Y1="47" X2="91" Y2="62" Stroke="White" StrokeThickness="2"/>
+
+                        <!-- 小刻度线（每10°，共36条，简化为8条示意）-->
+                        <Line X1="150" Y1="20" X2="150" Y2="32" Stroke="#6C7086" StrokeThickness="1" Canvas.Left="35" Canvas.Top="13"/>
+                        <Line X1="150" Y1="20" X2="150" Y2="32" Stroke="#6C7086" StrokeThickness="1" Canvas.Left="-35" Canvas.Top="13"/>
+                        <Line X1="150" Y1="268" X2="150" Y2="280" Stroke="#6C7086" StrokeThickness="1" Canvas.Left="35"/>
+                        <Line X1="150" Y1="268" X2="150" Y2="280" Stroke="#6C7086" StrokeThickness="1" Canvas.Left="-35"/>
+
+                        <!-- 红色指针（RotateTransform 绑定 DialRotation）-->
+                        <Path Data="M 150,150 L 145,30 L 150,20 L 155,30 Z" Fill="#F38BA8" Stroke="#F38BA8" StrokeThickness="1">
+                            <Path.RenderTransform>
+                                <RotateTransform Angle="{Binding DialRotation}" CenterX="150" CenterY="150"/>
+                            </Path.RenderTransform>
+                        </Path>
+
+                        <!-- 中心圆 + 当前角度大字 -->
+                        <Ellipse Width="80" Height="80" Canvas.Left="110" Canvas.Top="110" Fill="#1E1E2E" Stroke="#CBA6F7" StrokeThickness="2"/>
+                        <TextBlock Text="{Binding CurrentAngleText}" Canvas.Left="115" Canvas.Top="130" Foreground="#CBA6F7" FontSize="20" FontWeight="Bold" TextAlignment="Center" Width="70"/>
+                    </Canvas>
                 </Grid>
             </Border>
 
-            <!-- 右：配置 + 进度 + 日志 -->
-            <StackPanel Grid.Column="1" Margin="0,8,8,8">
+            <!-- ────────────────────────────────────────────────────────
+                 右：分步引导 + 配置区 + 实时角度 + 进度 + 日志流
+                 ──────────────────────────────────────────────────────── -->
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="0,12,12,12">
 
-                <!-- 配置区 -->
-                <Border Background="#181825" CornerRadius="6" Padding="12" Margin="0,0,0,8">
-                    <StackPanel>
-                        <TextBlock Text="拍摄配置" FontWeight="Bold" FontSize="14"
-                                   Foreground="#CBA6F7" Margin="0,0,0,8"/>
+                    <!-- ① 分步引导卡（Step 1-4）-->
+                    <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="12" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="操作步骤" FontWeight="Bold" FontSize="14" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,8"/>
 
-                        <TextBlock Text="PLC IP 地址" Style="{StaticResource Label}"/>
-                        <TextBox Text="{Binding PlcIp, UpdateSourceTrigger=PropertyChanged}"
-                                 Style="{StaticResource Input}"/>
+                            <!-- Step 1: 连接 PLC -->
+                            <Border BorderBrush="{Binding Step1Brush}" Style="{StaticResource StepBox}">
+                                <TextBlock Foreground="{Binding Step1Brush}" FontWeight="SemiBold">
+                                    <Run Text="Step 1:"/><Run Text=" 连接 PLC"/>
+                                </TextBlock>
+                            </Border>
 
-                        <TextBlock Text="拍摄张数" Style="{StaticResource Label}"/>
-                        <ComboBox ItemsSource="{Binding ShotCountOptions}"
-                                  SelectedItem="{Binding SelectedShotCount}"
-                                  IsEnabled="{Binding IsCapturing, Converter={x:Static vm:InvertBoolConverter.Instance}}"
-                                  Background="#313244" Foreground="#CDD6F4"
-                                  BorderBrush="#45475A" Padding="6,4" FontSize="13">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding StringFormat='{}{0} 张'}"/>
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
+                            <!-- Step 2: 连接相机 -->
+                            <Border BorderBrush="{Binding Step2Brush}" Style="{StaticResource StepBox}">
+                                <TextBlock Foreground="{Binding Step2Brush}" FontWeight="SemiBold">
+                                    <Run Text="Step 2:"/><Run Text=" 连接相机"/>
+                                </TextBlock>
+                            </Border>
 
-                        <TextBlock Text="照片保存目录" Style="{StaticResource Label}"/>
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBox Grid.Column="0"
-                                     Text="{Binding SaveFolder, UpdateSourceTrigger=PropertyChanged}"
-                                     Style="{StaticResource Input}"/>
-                            <Button Grid.Column="1" Content="浏览"
-                                    Command="{Binding BrowseFolderCommand}"
-                                    Style="{StaticResource ActionBtn}"
-                                    Margin="4,0,0,0" Padding="8,4"/>
-                        </Grid>
-                    </StackPanel>
-                </Border>
+                            <!-- Step 3: 开启实时取景 -->
+                            <Border BorderBrush="{Binding Step3Brush}" Style="{StaticResource StepBox}">
+                                <TextBlock Foreground="{Binding Step3Brush}" FontWeight="SemiBold">
+                                    <Run Text="Step 3:"/><Run Text=" 开启实时取景"/>
+                                </TextBlock>
+                            </Border>
 
-                <!-- 进度区 -->
-                <Border Background="#181825" CornerRadius="6" Padding="12" Margin="0,0,0,8">
-                    <StackPanel>
-                        <DockPanel Margin="0,0,0,6">
-                            <TextBlock Text="拍摄进度" FontWeight="Bold" FontSize="14"
-                                       Foreground="#CBA6F7" DockPanel.Dock="Left"/>
-                            <TextBlock Text="{Binding ProgressText}"
-                                       Foreground="#A6E3A1" FontSize="13" FontWeight="Bold"
-                                       HorizontalAlignment="Right"/>
-                        </DockPanel>
-                        <ProgressBar Value="{Binding ProgressCurrent}"
-                                     Maximum="{Binding ProgressTotal}"
-                                     Height="8" Background="#313244"
-                                     Foreground="#A6E3A1"/>
-                    </StackPanel>
-                </Border>
+                            <!-- Step 4: 开始拍摄 -->
+                            <Border BorderBrush="{Binding Step4Brush}" Style="{StaticResource StepBox}">
+                                <TextBlock Foreground="{Binding Step4Brush}" FontWeight="SemiBold">
+                                    <Run Text="Step 4:"/><Run Text=" 开始拍摄"/>
+                                </TextBlock>
+                            </Border>
+                        </StackPanel>
+                    </Border>
 
-                <!-- 日志区 -->
-                <Border Background="#181825" CornerRadius="6" Padding="12">
-                    <StackPanel>
-                        <TextBlock Text="运行日志" FontWeight="Bold" FontSize="14"
-                                   Foreground="#CBA6F7" Margin="0,0,0,6"/>
-                        <ScrollViewer Height="260" VerticalScrollBarVisibility="Auto">
-                            <TextBox Text="{Binding Log, Mode=OneWay}"
-                                     Background="Transparent" BorderThickness="0"
-                                     Foreground="#A6ADC8" FontSize="11" FontFamily="Consolas"
-                                     IsReadOnly="True" TextWrapping="Wrap"/>
-                        </ScrollViewer>
-                    </StackPanel>
-                </Border>
+                    <!-- ② 配置区 -->
+                    <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="12" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="拍摄配置" FontWeight="Bold" FontSize="14" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,8"/>
 
-            </StackPanel>
+                            <TextBlock Text="PLC IP 地址" Style="{StaticResource Label}"/>
+                            <TextBox Text="{Binding PlcIp, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Input}" IsEnabled="{Binding PlcConnected, Converter={x:Static vm:InvertBoolConverter.Instance}}"/>
+
+                            <TextBlock Text="拍摄张数" Style="{StaticResource Label}"/>
+                            <ComboBox ItemsSource="{Binding ShotCountOptions}"
+                                      SelectedItem="{Binding SelectedShotCount}"
+                                      IsEnabled="{Binding CanChangeShotCount}"
+                                      Background="{StaticResource BgCard}" Foreground="{StaticResource TextPrimary}"
+                                      BorderBrush="{StaticResource Border}" BorderThickness="1"
+                                      Padding="8,6" FontSize="13">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding StringFormat='{}{0} 张'}"/>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+
+                            <TextBlock Text="步进角度" Style="{StaticResource Label}"/>
+                            <TextBlock Text="{Binding StepAngle}" Foreground="{StaticResource TextPrimary}" FontSize="13" Margin="0,4,0,0"/>
+
+                            <TextBlock Text="照片保存目录" Style="{StaticResource Label}"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0" Text="{Binding SaveFolder, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Input}"/>
+                                <Button Grid.Column="1" Content="浏览" Command="{Binding BrowseFolderCommand}" Style="{StaticResource ActionBtn}" Margin="6,0,0,0" Padding="12,6"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ③ 实时角度大字 -->
+                    <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="12" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="当前转盘角度" FontWeight="Bold" FontSize="14" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,6"/>
+                            <TextBlock Text="{Binding CurrentAngleText}" Foreground="{StaticResource SuccessGreen}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ④ 进度区 -->
+                    <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="12" Margin="0,0,0,12">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,8">
+                                <TextBlock Text="拍摄进度" FontWeight="Bold" FontSize="14" Foreground="{StaticResource BrandPurple}" HorizontalAlignment="Left"/>
+                                <TextBlock Text="{Binding ProgressText}" Foreground="{StaticResource SuccessGreen}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                            </Grid>
+                            <ProgressBar Value="{Binding ProgressCurrent}" Maximum="{Binding ProgressTotal}" Height="10" Background="{StaticResource BgCard}" Foreground="{StaticResource SuccessGreen}" BorderThickness="0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ⑤ 彩色日志流（ItemsControl 绑定 LogEntries，Color 属性绑定到 Foreground）-->
+                    <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="12">
+                        <StackPanel>
+                            <TextBlock Text="运行日志" FontWeight="Bold" FontSize="14" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,8"/>
+                            <ScrollViewer Height="280" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <ItemsControl ItemsSource="{Binding LogEntries}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Foreground="{Binding Color}" FontSize="11" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,1">
+                                                <Run Text="{Binding Time, Mode=OneWay}"/><Run Text=" "/><Run Text="{Binding Message, Mode=OneWay}"/>
+                                            </TextBlock>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </StackPanel>
+                    </Border>
+
+                </StackPanel>
+            </ScrollViewer>
+
         </Grid>
     </DockPanel>
 </Window>
