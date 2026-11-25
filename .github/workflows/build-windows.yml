@@ -38,7 +38,7 @@ jobs:
       - name: Build WPF upper-computer
         run: |
           dotnet build TurntableStudio/TurntableStudio.csproj `
-            -c Release -r win-x64 --self-contained false `
+            -c Release `
             -o publish/
 
       - name: Copy runtime DLLs to publish
