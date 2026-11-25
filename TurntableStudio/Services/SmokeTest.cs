@@ -1,9 +1,8 @@
 using System;
 using System.IO;
 using System.Text;
-using TurntableStudio.Services;
 
-namespace TurntableStudio
+namespace TurntableStudio.Services
 {
     /// <summary>
     /// 命令行自检工具：验证 SonyCrBridge.dll 和转盘 SDK 的基础链路是否正常。
