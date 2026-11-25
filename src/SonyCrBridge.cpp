@@ -199,115 +199,119 @@ BridgeState& State()
 
 void CameraCallback::OnConnected(DeviceConnectionVersion)
 {
-    state_.NotifyConnected();
+    try { state_.NotifyConnected(); } catch (...) {}
 }
 
 void CameraCallback::OnDisconnected(CrInt32u error)
 {
-    state_.NotifyDisconnected(error);
+    try { state_.NotifyDisconnected(error); } catch (...) {}
 }
 
 void CameraCallback::OnPropertyChanged()
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnLvPropertyChanged()
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnError(CrInt32u error)
 {
-    state_.NotifyError(error);
+    try { state_.NotifyError(error); } catch (...) {}
 }
 
 void CameraCallback::OnCompleteDownload(CrChar* filename, CrInt32u type)
 {
-    state_.NotifyDownload(filename, type);
+    try { state_.NotifyDownload(filename, type); } catch (...) {}
 }
 
 void CameraCallback::OnCompleteOperation(CrInt32u, CrOperationResultData* resultData)
 {
-    CrDeviceHandle handle = 0;
+    try
     {
-        std::lock_guard<std::mutex> lock(state_.eventMutex);
-        handle = state_.deviceHandle;
+        CrDeviceHandle handle = 0;
+        {
+            std::lock_guard<std::mutex> lock(state_.eventMutex);
+            handle = state_.deviceHandle;
+        }
+        if (resultData != nullptr && handle != 0)
+        {
+            SCRSDK::ReleaseOperationResultObject(handle, resultData);
+        }
     }
-    if (resultData != nullptr && handle != 0)
-    {
-        SCRSDK::ReleaseOperationResultObject(handle, resultData);
-    }
+    catch (...) {}
 }
 
 void CameraCallback::OnWarning(CrInt32u)
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnPropertyChangedCodes(CrInt32u, CrInt32u*)
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnLvPropertyChangedCodes(CrInt32u, CrInt32u*)
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnNotifyContentsTransfer(CrInt32u, CrContentHandle, CrChar*)
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnWarningExt(CrInt32u, CrInt32, CrInt32, CrInt32)
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnNotifyFTPTransferResult(CrInt32u, CrInt32u, CrInt32u)
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnNotifyRemoteTransferResult(CrInt32u, CrInt32u, CrChar*)
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnNotifyRemoteTransferResult(CrInt32u, CrInt32u, CrInt8u*, CrInt64u)
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnNotifyRemoteTransferContentsListChanged(CrInt32u, CrInt32u, CrInt32u)
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnNotifyRemoteFirmwareUpdateResult(CrInt32u, const void*)
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnReceivePlaybackTimeCode(CrInt32u)
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnReceivePlaybackData(CrInt8u, CrInt32, CrInt8u*, CrInt64, CrInt64, CrInt32, CrInt32)
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnNotifyMonitorUpdated(CrInt32u, CrInt32u)
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 void CameraCallback::OnNotifyPostViewImage(CrChar*, CrInt32u)
 {
-    state_.NotifyEvent();
+    try { state_.NotifyEvent(); } catch (...) {}
 }
 
 std::string JsonEscape(const char* value)
@@ -599,6 +603,18 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Connect(int32_t index, uint32_t timeoutMs)
             [&state] { return state.connected || state.disconnected || state.callbackError != 0; });
         if (!eventReceived)
         {
+            // FIX 1: 超时必须清除 connectPending，防止 Disconnect 二次死锁
+            state.connectPending = false;
+            eventLock.unlock();
+            // 尽力向 SDK 发起取消连接，忽略返回值（句柄可能尚未就绪）
+            const CrDeviceHandle pendingHandle = state.deviceHandle;
+            if (pendingHandle != 0)
+            {
+                SCRSDK::Disconnect(pendingHandle);
+                SCRSDK::ReleaseDevice(pendingHandle);
+                std::lock_guard<std::mutex> hLock(state.eventMutex);
+                state.deviceHandle = 0;
+            }
             state.SetError("Timed out waiting for Sony SDK OnConnected callback.");
             return CrBridge_Error_Timeout;
         }
@@ -712,19 +728,28 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Disconnect(void)
             }
         }
 
-        std::unique_lock<std::mutex> eventLock(state.eventMutex);
-        if (!state.eventChanged.wait_for(
-                eventLock,
-                std::chrono::milliseconds(kDefaultConnectTimeoutMs),
-                [&state] { return state.disconnected; }))
+        // FIX 2: 等待断连回调，超时后不提前 return，继续走幂等清理
+        bool disconnectTimedOut = false;
         {
-            state.SetError("Timed out waiting for Sony SDK OnDisconnected callback.");
-            return CrBridge_Error_Timeout;
+            std::unique_lock<std::mutex> eventLock(state.eventMutex);
+            if (!state.eventChanged.wait_for(
+                    eventLock,
+                    std::chrono::milliseconds(kDefaultConnectTimeoutMs),
+                    [&state] { return state.disconnected; }))
+            {
+                disconnectTimedOut = true;
+                state.SetError("Timed out waiting for Sony SDK OnDisconnected callback.");
+                // 不 return — 继续执行幂等资源释放
+            }
         }
-        eventLock.unlock();
 
+        // 幂等 Teardown：无论超时与否，以下清理必须 100% 执行
         const CrDeviceHandle handle = state.deviceHandle;
-        const CrError releaseResult = SCRSDK::ReleaseDevice(handle);
+        CrError releaseResult = CrError_None;
+        if (handle != 0)
+        {
+            releaseResult = SCRSDK::ReleaseDevice(handle);
+        }
         {
             std::lock_guard<std::mutex> eventLock(state.eventMutex);
             state.deviceHandle = 0;
@@ -743,6 +768,12 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Disconnect(void)
 
         const bool releaseSucceeded = SCRSDK::Release();
         state.initialized = false;
+
+        // 超时优先上报，其次 SDK release 错误
+        if (disconnectTimedOut)
+        {
+            return CrBridge_Error_Timeout;
+        }
         if (releaseResult != CrError_None)
         {
             state.SetSdkError("ReleaseDevice", releaseResult);
@@ -967,12 +998,33 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_TakePicture(uint32_t holdMs)
             : std::min(holdMs, kMaximumShutterHoldMs);
         const CrError downResult = SCRSDK::SendCommand(
             state.deviceHandle, CrCommandId_Release, CrCommandParam_Down);
+
+        // FIX 3: RAII 快门守卫 — 无论后续如何退出，Shutter Up 必须执行
+        // 防止快门按下后因异常或提前 return 导致相机长期锁死
+        struct ShutterGuard
+        {
+            CrDeviceHandle handle;
+            bool armed;
+            ShutterGuard(CrDeviceHandle h, bool ok) : handle(h), armed(ok) {}
+            ~ShutterGuard()
+            {
+                if (armed && handle != 0)
+                {
+                    try { SCRSDK::SendCommand(handle, CrCommandId_Release, CrCommandParam_Up); }
+                    catch (...) {}
+                }
+            }
+            void disarm() { armed = false; }
+        } shutterGuard(state.deviceHandle, downResult == CrError_None);
+
         if (downResult == CrError_None)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(duration));
         }
         const CrError upResult = SCRSDK::SendCommand(
             state.deviceHandle, CrCommandId_Release, CrCommandParam_Up);
+        shutterGuard.disarm(); // 已手动发 Up，守卫解除
+
         if (downResult != CrError_None)
         {
             state.SetSdkError("SendCommand(shutter down)", downResult);
