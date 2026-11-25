@@ -46,10 +46,10 @@ namespace TurntableStudio.Services
         /// 转动到目标角度，之后轮询直到实测角度与目标在容差内停稳，或超时。
         /// toleranceDeg：停稳容差（默认 0.5°）
         /// stabilizeMs：确认停稳所需的稳定时间窗口（默认 300ms）
-        /// timeoutMs：总等待超时（默认 8000ms）
+        /// timeoutMs：总等待超时（默认 60000ms）
         /// </summary>
         public async Task MoveToAsync(double targetDeg, double toleranceDeg = 0.5,
-            int stabilizeMs = 300, int timeoutMs = 8000)
+            int stabilizeMs = 300, int timeoutMs = 60000)
         {
             EnsureConnected();
             _controller!.MoveTo(targetDeg);
@@ -76,6 +76,8 @@ namespace TurntableStudio.Services
                     stableStart = null; // 仍在运动，重置稳定计时
                 }
             }
+            // 超时后先强制停止，再抛异常，避免转盘持续旋转
+            try { _controller!.Stop(); } catch { }
             throw new TimeoutException($"转盘 MoveTo({targetDeg:F1}°) 超时 {timeoutMs}ms，当前角度 {_controller.ReadAngleDegrees():F1}°");
         }
 
