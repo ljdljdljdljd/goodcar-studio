@@ -333,7 +333,7 @@
                                 <TextBlock Text="拍摄进度" FontWeight="Bold" FontSize="14" Foreground="{StaticResource BrandPurple}" HorizontalAlignment="Left"/>
                                 <TextBlock Text="{Binding ProgressText}" Foreground="{StaticResource SuccessGreen}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Right" VerticalAlignment="Center"/>
                             </Grid>
-                            <ProgressBar Value="{Binding ProgressCurrent}" Maximum="{Binding ProgressTotal}" Height="10" Background="{StaticResource BgCard}" Foreground="{StaticResource SuccessGreen}" BorderThickness="0"/>
+                            <ProgressBar Value="{Binding ProgressCurrent, Mode=OneWay}" Maximum="{Binding ProgressTotal, Mode=OneWay}" Height="10" Background="{StaticResource BgCard}" Foreground="{StaticResource SuccessGreen}" BorderThickness="0"/>
                         </StackPanel>
                     </Border>
 
