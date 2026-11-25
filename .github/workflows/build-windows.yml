@@ -1,0 +1,66 @@
+name: Build Windows Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Setup MSVC (via Visual Studio shell)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
+      - name: Configure SonyCrBridge (cmake)
+        run: |
+          cmake -S . -B build `
+            -G "Visual Studio 17 2022" -A x64
+
+      - name: Build SonyCrBridge.dll
+        run: cmake --build build --config Release
+
+      - name: Copy SonyCrBridge.dll to libs
+        run: |
+          copy build\Release\SonyCrBridge.dll libs\SonyCrBridge.dll
+
+      - name: Build WPF upper-computer
+        run: |
+          dotnet build TurntableStudio/TurntableStudio.csproj `
+            -c Release -r win-x64 --self-contained false `
+            -o publish/
+
+      - name: Copy runtime DLLs to publish
+        run: |
+          copy libs\Cr_Core.dll publish\
+          copy libs\monitor_protocol.dll publish\
+          copy libs\monitor_protocol_pf.dll publish\
+          copy libs\SonyCrBridge.dll publish\
+          xcopy libs\CrAdapter publish\CrAdapter\ /E /I /Y
+          copy libs\Huateng.Turntable.Sdk.dll publish\
+
+      - name: Copy Driver folder to publish
+        run: xcopy Driver publish\Driver\ /E /I /Y
+
+      - name: Package publish as zip
+        run: |
+          Compress-Archive -Path publish\* `
+            -DestinationPath GoodCar_Studio_Release.zip
+
+      - name: Upload Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoodCar_Studio_Release
+          path: GoodCar_Studio_Release.zip
+          retention-days: 30
