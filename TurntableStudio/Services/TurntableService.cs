@@ -137,7 +137,7 @@ namespace TurntableStudio.Services
         public async Task MoveToWithDirectionAsync(double targetDeg, bool forward)
         {
             EnsureConnected();
-            await MoveToAsync(targetDeg, forward: forward);
+            await MoveToAsync(targetDeg, forward: forward, timeoutMs: 120000);
         }
 
         public void Dispose()
