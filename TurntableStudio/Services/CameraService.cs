@@ -7,12 +7,12 @@ using System.Threading;
 namespace TurntableStudio.Services
 {
     /// <summary>
-    /// P/Invoke 封装 SonyCrBridge.dll — 重构后 ABI (v3.8+)：
+    /// P/Invoke 封装 SonyCrBridge.dll — ABI 严格匹配华腾 SDK 内部 P/Invoke 声明：
     ///   Initialize(string sdkRoot)
     ///   GetDeviceDescriptor(int index, StringBuilder buffer, int bufferSize)
     ///   Connect(string descriptorJson, int interfaceType)
-    ///   GetLiveViewJpeg(byte[] buf, int bufSize, out int imageSize)   — caller-owned buffer (Task 1)
-    ///   TakePicture(string targetPath, int timeoutMs)                  — auto-reconnect on timeout (Task 2)
+    ///   GetLiveViewJpeg(out IntPtr data, out int length)   — bridge-owned buffer, do NOT free
+    ///   TakePicture(string targetPath, int timeoutMs)
     /// </summary>
     public sealed class CameraService : IDisposable
     {
@@ -20,9 +20,6 @@ namespace TurntableStudio.Services
         private bool _disposed;
         private bool _initialized;
         private bool _captureRequiresReconnect;
-
-        // Task 1: Reusable 2MB buffer for LiveView frames (no per-frame allocation)
-        private static readonly byte[] _liveViewBuf = new byte[2 * 1024 * 1024];
 
         #region P/Invoke — exact ABI match to Huateng.Turntable.Sdk.Internal.SonyDevice
 
@@ -44,13 +41,11 @@ namespace TurntableStudio.Services
         private static extern int CrBridge_Disconnect();
 
         /// <summary>
-        /// Task 1: Caller provides buffer; bridge fills it via memcpy (eliminates cross-thread race).
+        /// data points into bridge-owned memory — do NOT call CrBridge_FreeBuffer.
+        /// Copy on the calling thread, before its next GetLiveViewJpeg call.
         /// </summary>
         [DllImport(BridgeDll, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int CrBridge_GetLiveViewJpeg(
-            [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 1)] byte[] buf,
-            int bufSize,
-            out int imageSize);
+        private static extern int CrBridge_GetLiveViewJpeg(out IntPtr data, out int length);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int ShouldCancel();
@@ -148,18 +143,17 @@ namespace TurntableStudio.Services
 
         /// <summary>
         /// 获取当前一帧 LiveView JPEG 字节数组。
-        /// Task 1: 使用调用方提供的 buffer，bridge 通过 memcpy 填充，消除跨线程指针竞争。
+        /// 数据来自 bridge 内部缓冲区，每次调用都会刷新，请及时复制。
         /// </summary>
         public byte[]? GetLiveViewJpeg()
         {
-            int imageSize;
-            int result = CrBridge_GetLiveViewJpeg(_liveViewBuf, _liveViewBuf.Length, out imageSize);
+            int result = CrBridge_GetLiveViewJpeg(out IntPtr data, out int length);
             if (result == -3)
                 throw new InvalidOperationException("相机已断开，请重新连接。");
-            if (result < 0 || imageSize <= 0) return null;
-            var frame = new byte[imageSize];
-            Array.Copy(_liveViewBuf, frame, imageSize);
-            return frame;
+            if (result < 0 || data == IntPtr.Zero || length <= 0) return null;
+            var bytes = new byte[length];
+            Marshal.Copy(data, bytes, 0, length);
+            return bytes;
         }
 
         /// <summary>
