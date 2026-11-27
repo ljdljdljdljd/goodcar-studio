@@ -39,7 +39,7 @@ namespace TurntableStudio.Services
         private const int SampleIntervalMs = 100;
         private const int StableWindowMs = 500;
         private const int MaxSampleGapMs = 300;
-        private const double TargetToleranceDeg = 0.5;
+        private const double TargetToleranceDeg = 1.5;
 
         private readonly TurntableService _turntable;
         private readonly CameraService _camera;
@@ -134,7 +134,7 @@ namespace TurntableStudio.Services
         {
             // 轮询角度，当已转过步幅的 80% 时发 StopRotation
             // 防止转盘冲过目标太多
-            double stopThreshold = stepAngle * 0.80;
+            double stopThreshold = stepAngle * 0.70;
             var clock = Stopwatch.StartNew();
             while (clock.ElapsedMilliseconds < MotionSettleTimeoutMs)
             {
