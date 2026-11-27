@@ -46,6 +46,7 @@ namespace TurntableStudio.ViewModels
         private readonly CameraService _camera = new();
         private readonly Func<bool>? _readPlcIdle;
         private CancellationTokenSource? _captureCts;
+        private CancellationTokenSource? _manualMoveCts;
         private DispatcherTimer? _liveViewTimer;
         private DispatcherTimer? _angleTimer;
         private Task _liveViewPoll = Task.CompletedTask;
@@ -289,8 +290,8 @@ namespace TurntableStudio.ViewModels
             GoHomeCommand         = new AsyncRelayCommand(() => RunDeviceAsync(GoHomeAsync));
             ManualForwardCommand  = new AsyncRelayCommand(() => RunDeviceAsync(() => StartRotationAsync(true)));
             ManualReverseCommand  = new AsyncRelayCommand(() => RunDeviceAsync(() => StartRotationAsync(false)));
-            MoveForwardCommand    = new AsyncRelayCommand(() => RunDeviceAsync(() => MoveToAngleAsync(true)));
-            MoveReverseCommand    = new AsyncRelayCommand(() => RunDeviceAsync(() => MoveToAngleAsync(false)));
+            MoveForwardCommand    = new AsyncRelayCommand(() => MoveToAngleAsync(true));
+            MoveReverseCommand    = new AsyncRelayCommand(() => MoveToAngleAsync(false));
         }
 
         private void RefreshDeviceGuards()
@@ -607,9 +608,12 @@ namespace TurntableStudio.ViewModels
         private async Task StopOrCancelAsync()
         {
             if (IsCapturing) { CancelCapture(); return; }
+            var manualMove = _manualMoveCts;
+            manualMove?.Cancel();
             if (!PlcConnected) return;
             if (_deviceBusy) await _deviceTask;
             if (IsCapturing) { CancelCapture(); return; }
+            if (manualMove != null && !_manualMotionMayBeActive) return;
             await RunDeviceAsync(StopManualAsync, stopping: true);
         }
 
@@ -637,19 +641,42 @@ namespace TurntableStudio.ViewModels
 
         private async Task MoveToAngleAsync(bool forward)
         {
+            if (_manualMoveCts != null) return;
             if (!PlcConnected) { AddLog("请先连接 PLC", LogLevel.Warning); return; }
-            if (TargetAngle < 0 || TargetAngle >= 360)
+            double targetAngle = TargetAngle;
+            if (!(targetAngle >= 0 && targetAngle < 360))
             {
                 AddLog("目标角度必须在 0-360° 范围内", LogLevel.Warning);
                 return;
             }
-            try
+
+            using var cts = new CancellationTokenSource();
+            _manualMoveCts = cts;
+            try { await RunDeviceAsync(MoveAsync); }
+            finally { _manualMoveCts = null; }
+
+            async Task MoveAsync()
             {
                 _manualMotionMayBeActive = true;
-                await Task.Run(() => _turntable.MoveToWithDirection(TargetAngle, forward));
-                AddLog($"已启动转盘移动到 {TargetAngle:F1}° ({(forward ? "正转" : "反转")})", LogLevel.Success);
+                try
+                {
+                    await Task.Run(() => _turntable.MoveToAsync(targetAngle, forward, toleranceDeg: 1.0,
+                        timeoutMs: 30000, ct: cts.Token));
+                    _manualMotionMayBeActive = false;
+                    AddLog($"已到达目标角度 {targetAngle:F1}°（{(forward ? "正转" : "反转")}）", LogLevel.Success);
+                }
+                catch (TimeoutException ex)
+                {
+                    _manualMotionMayBeActive = false;
+                    AddLog($"移动超时：{ex.Message}", LogLevel.Error);
+                }
+                catch (OperationCanceledException)
+                {
+                    _manualMotionMayBeActive = false;
+                    AddLog("移动已取消", LogLevel.Warning);
+                }
+                catch (Exception ex) { AddLog($"移动到目标角度失败：{ex.Message}", LogLevel.Error); }
             }
-            catch (Exception ex) { AddLog($"移动到目标角度失败：{ex.Message}", LogLevel.Error); }
         }
 
         // ── 彩色日志追加 ─────────────────────────────────────────────
@@ -721,6 +748,7 @@ namespace TurntableStudio.ViewModels
             _closing = true;
             RefreshDeviceGuards();
             CancelCapture();
+            _manualMoveCts?.Cancel();
             try
             {
                 await _deviceTask;

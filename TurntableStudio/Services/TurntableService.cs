@@ -1,5 +1,7 @@
 using System;
 using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
 using Huateng.Turntable.Sdk;
 
 namespace TurntableStudio.Services
@@ -119,11 +121,56 @@ namespace TurntableStudio.Services
             _controller!.Configure(speed, pulse, accelDecel);
         }
 
+        /// <summary>
+        /// 按指定方向转动，直到读数进入目标角度容差，然后发送停止指令。
+        /// 超时或取消时也发送停止指令。寄存器 1518 保持 360°。
+        /// </summary>
+        public async Task MoveToAsync(double targetDeg, bool forward,
+            double toleranceDeg = 1.0, int timeoutMs = 30000, CancellationToken ct = default)
+        {
+            if (!(targetDeg >= 0 && targetDeg < 360))
+                throw new ArgumentOutOfRangeException(nameof(targetDeg));
+            if (!(toleranceDeg >= 0 && toleranceDeg <= 180))
+                throw new ArgumentOutOfRangeException(nameof(toleranceDeg));
+            if (timeoutMs <= 0)
+                throw new ArgumentOutOfRangeException(nameof(timeoutMs));
+
+            ct.ThrowIfCancellationRequested();
+            SetDirection(forward);
+            ct.ThrowIfCancellationRequested();
+
+            var clock = Stopwatch.StartNew();
+            try
+            {
+                StartRotation();
+                while (clock.ElapsedMilliseconds < timeoutMs)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    double current = ReadAngle();
+                    ct.ThrowIfCancellationRequested();
+                    if (clock.ElapsedMilliseconds >= timeoutMs) break;
+                    if (!(current >= 0 && current < 360))
+                        throw new InvalidOperationException($"无效的 PLC 角度读数：{current}。");
+
+                    double delta = Math.Abs(current - targetDeg);
+                    if (Math.Min(delta, 360 - delta) <= toleranceDeg) return;
+
+                    await Task.Delay(80, ct).ConfigureAwait(false);
+                }
+                ct.ThrowIfCancellationRequested();
+                throw new TimeoutException($"转动到 {targetDeg:F1}° 超时（{timeoutMs}ms）。");
+            }
+            finally
+            {
+                try { StopRotation(); }
+                catch (Exception ex) { throw new InvalidOperationException("发送转盘停止指令失败。", ex); }
+                finally { _prevAngleForIdle = double.NaN; }
+            }
+        }
+
         public void MoveToWithDirection(double targetDeg, bool forward)
         {
-            EnsureConnected();
-            _controller!.SetDirection(forward ? MovementDirection.Forward : MovementDirection.Reverse);
-            _controller!.WriteTargetAngle((ushort)targetDeg);
+            SetDirection(forward);
             StartRotation();
         }
 
