@@ -42,7 +42,7 @@ namespace TurntableStudio.ViewModels
 
     public sealed class MainViewModel : INotifyPropertyChanged
     {
-        private readonly TurntableService _turntable = new();
+        private readonly TurntableService _turntable;
         private readonly CameraService _camera = new();
         private readonly Func<bool>? _readPlcIdle;
         private CancellationTokenSource? _captureCts;
@@ -270,8 +270,11 @@ namespace TurntableStudio.ViewModels
 
         public MainViewModel() : this(null) { }
 
-        public MainViewModel(Func<bool>? readPlcIdle)
+        public MainViewModel(Func<bool>? readPlcIdle) : this(new TurntableService(), readPlcIdle) { }
+
+        internal MainViewModel(TurntableService turntable, Func<bool>? readPlcIdle)
         {
+            _turntable = turntable;
             _readPlcIdle = readPlcIdle;
             _turntable.StatusChanged += (_, msg) => AddLog(msg, LogLevel.Info);
 

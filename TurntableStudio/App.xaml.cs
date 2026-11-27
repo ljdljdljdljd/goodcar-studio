@@ -36,7 +36,9 @@ namespace TurntableStudio
             base.OnStartup(e);
             try
             {
-                new Views.MainWindow().Show();
+                var turntable = new Services.TurntableService();
+                var model = new ViewModels.MainViewModel(turntable, turntable.IsRotationIdle);
+                new Views.MainWindow { DataContext = model }.Show();
             }
             catch (Exception ex)
             {

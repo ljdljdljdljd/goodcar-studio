@@ -34,6 +34,8 @@ using namespace SCRSDK;
 constexpr uint32_t kDefaultConnectTimeoutMs = 15000;
 constexpr int32_t  kDefaultTakePictureTimeoutMs = 30000;
 constexpr uint32_t kDefaultShutterHoldMs = 100;
+constexpr int kLiveViewRetries = 3;
+constexpr std::chrono::milliseconds kLiveViewRetryDelay{100};
 namespace fs = std::filesystem;
 
 class BridgeState;
@@ -606,6 +608,9 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Connect(const char* descriptorJson, int32_t
             }
         }
 
+        if (state.deviceHandle != 0)
+            SCRSDK::SetDeviceSetting(state.deviceHandle, Setting_Key_EnableLiveView, CrDeviceSetting_Enable);
+
         state.captureNeedsReconnect = false;
         state.ClearError();
         return CrBridge_Ok;
@@ -674,6 +679,9 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* le
     if (data == nullptr || length == nullptr)
         return CrBridge_Error_InvalidArgument;
 
+    *data = nullptr;
+    *length = 0;
+
     auto& state = State();
     std::lock_guard<std::mutex> apiLock(state.apiMutex);
     if (!state.initialized)
@@ -690,45 +698,62 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* le
     try
     {
         static thread_local std::vector<uint8_t> liveViewBuffer;
-        CrImageInfo imageInfo{};
-        CrError result = SCRSDK::GetLiveViewImageInfo(state.deviceHandle, &imageInfo);
-        if (result != CrError_None)
+        for (int attempt = 0; attempt <= kLiveViewRetries; ++attempt)
         {
-            state.SetSdkError("GetLiveViewImageInfo", result);
-            return CrBridge_Error_Sdk;
+            if (attempt != 0)
+            {
+                std::this_thread::sleep_for(kLiveViewRetryDelay);
+                if (!state.IsConnected())
+                {
+                    state.SetError("No connected camera.");
+                    return CrBridge_Error_NotConnected;
+                }
+            }
+
+            CrImageInfo imageInfo{};
+            CrError result = SCRSDK::GetLiveViewImageInfo(state.deviceHandle, &imageInfo);
+            if (result == CrWarning_Frame_NotUpdated)
+                continue;
+            if (result != CrError_None)
+            {
+                state.SetSdkError("GetLiveViewImageInfo", result);
+                return CrBridge_Error_Sdk;
+            }
+
+            const CrInt32u bufferSize = imageInfo.GetBufferSize();
+            if (bufferSize == 0)
+                continue;
+            if (liveViewBuffer.size() < bufferSize)
+                liveViewBuffer.resize(bufferSize);
+
+            CrImageDataBlock imageBlock{};
+            imageBlock.SetSize(static_cast<CrInt32u>(liveViewBuffer.size()));
+            imageBlock.SetData(liveViewBuffer.data());
+
+            result = SCRSDK::GetLiveViewImage(state.deviceHandle, &imageBlock);
+            if (result == CrWarning_Frame_NotUpdated)
+                continue;
+            if (result != CrError_None)
+            {
+                state.SetSdkError("GetLiveViewImage", result);
+                return CrBridge_Error_Sdk;
+            }
+
+            const CrInt32u imageSize = imageBlock.GetImageSize();
+            if (imageSize == 0)
+                continue;
+            if (imageSize > liveViewBuffer.size() || imageSize > INT32_MAX ||
+                imageBlock.GetImageData() != liveViewBuffer.data())
+            {
+                state.SetError("Sony SDK returned an invalid Live View JPEG buffer.");
+                return CrBridge_Error_Sdk;
+            }
+
+            *data   = liveViewBuffer.data();
+            *length = static_cast<int32_t>(imageSize);
+            break;
         }
 
-        const CrInt32u bufferSize = imageInfo.GetBufferSize();
-        if (bufferSize == 0)
-        {
-            state.SetError("Sony SDK reported an empty Live View buffer.");
-            return CrBridge_Error_Sdk;
-        }
-
-        if (liveViewBuffer.size() < bufferSize)
-            liveViewBuffer.resize(bufferSize);
-
-        CrImageDataBlock imageBlock{};
-        imageBlock.SetSize(static_cast<CrInt32u>(liveViewBuffer.size()));
-        imageBlock.SetData(liveViewBuffer.data());
-
-        result = SCRSDK::GetLiveViewImage(state.deviceHandle, &imageBlock);
-        if (result != CrError_None)
-        {
-            state.SetSdkError("GetLiveViewImage", result);
-            return CrBridge_Error_Sdk;
-        }
-
-        const CrInt32u imageSize = imageBlock.GetImageSize();
-        if (imageSize == 0 || imageSize > liveViewBuffer.size() || imageSize > INT32_MAX ||
-            imageBlock.GetImageData() != liveViewBuffer.data())
-        {
-            state.SetError("Sony SDK returned an empty Live View JPEG.");
-            return CrBridge_Error_Sdk;
-        }
-
-        *data   = static_cast<uint8_t*>(imageBlock.GetImageData());
-        *length = static_cast<int32_t>(imageSize);
         state.ClearError();
         return CrBridge_Ok;
     }
@@ -745,19 +770,18 @@ SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_GetDeviceCount(void)
     return static_cast<int32_t>(state.devices->GetCount());
 }
 
-// CrBridge_StartLiveView() — LiveView frames arrive via OnNotifyPostViewImage callback; no explicit start needed
 SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_StartLiveView(void)
 {
-    // Sony SDK streams PostView frames automatically after Connect — no separate start call required
     auto& state = State();
     std::lock_guard<std::mutex> apiLock(state.apiMutex);
     if (!state.initialized) { state.SetError("Not initialized."); return CrBridge_Error_NotInitialized; }
     if (state.deviceHandle == 0 || !state.IsConnected()) { state.SetError("No connected camera."); return CrBridge_Error_NotConnected; }
+    SCRSDK::SetDeviceSetting(state.deviceHandle, Setting_Key_EnableLiveView, CrDeviceSetting_Enable);
     state.ClearError();
     return CrBridge_Ok;
 }
 
-// CrBridge_StopLiveView() — no-op; PostView streaming stops on Disconnect
+// CrBridge_StopLiveView() — the caller stops polling; the SDK session ends on Disconnect
 SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_StopLiveView(void)
 {
     return CrBridge_Ok;

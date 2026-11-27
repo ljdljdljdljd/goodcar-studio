@@ -72,7 +72,8 @@ SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_Connect(
 SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_Disconnect(void);
 
 /* Get one Live View JPEG frame.  *data points into an internal buffer (do NOT free).
-   *length receives the JPEG byte count. Returns CrBridge_Ok or a negative error. */
+   *length receives the JPEG byte count. If no frame is ready, returns CrBridge_Ok
+   with *data == NULL and *length == 0. Errors return a negative code. */
 SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(
     uint8_t** data,
     int32_t*  length);

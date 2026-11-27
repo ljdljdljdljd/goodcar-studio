@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using Huateng.Turntable.Sdk;
 
 namespace TurntableStudio.Services
@@ -8,15 +9,21 @@ namespace TurntableStudio.Services
     /// </summary>
     public sealed class TurntableService : IDisposable
     {
+        private const double IdleThresholdDeg = 0.3;
+        private const long IdleMinIntervalMs = 80;
+
         private TurntableController? _controller;
         private TurntableOptions? _options;
         private bool _disposed;
+        private double _prevAngleForIdle = double.NaN;
+        private long _prevAngleTickForIdle;
 
         public bool IsConnected { get; private set; }
         public event EventHandler<string>? StatusChanged;
 
         public void Connect(string plcIp, int port = 502, byte slaveId = 1)
         {
+            _prevAngleForIdle = double.NaN;
             _options = new TurntableOptions
             {
                 PlcIp = plcIp,
@@ -39,12 +46,32 @@ namespace TurntableStudio.Services
             _controller.Dispose();
             _controller = null;
             IsConnected = false;
+            _prevAngleForIdle = double.NaN;
         }
 
         public double ReadAngle()
         {
             EnsureConnected();
             return _controller!.ReadAngleDegrees();
+        }
+
+        /// <summary>
+        /// 通过间隔至少 80ms 的两次角度读数估算停稳，首次采样返回 false。
+        /// </summary>
+        public bool IsRotationIdle()
+        {
+            var controller = _controller;
+            if (controller == null || !IsConnected) return false;
+
+            double angle = controller.ReadAngleDegrees();
+            long now = Stopwatch.GetTimestamp();
+            long elapsedMs = (now - _prevAngleTickForIdle) * 1000 / Stopwatch.Frequency;
+            bool idle = IsConnected && elapsedMs >= IdleMinIntervalMs &&
+                        Math.Abs(angle - _prevAngleForIdle) < IdleThresholdDeg;
+
+            _prevAngleForIdle = IsConnected && !double.IsInfinity(angle) ? angle : double.NaN;
+            _prevAngleTickForIdle = now;
+            return idle;
         }
 
         private void EnsureConnected()
@@ -56,6 +83,7 @@ namespace TurntableStudio.Services
         private void OnConnectionChanged(object sender, ConnectionChangedEventArgs e)
         {
             IsConnected = e.State == ConnectionState.Connected;
+            if (!IsConnected) _prevAngleForIdle = double.NaN;
             StatusChanged?.Invoke(this, $"PLC [{e.Target}] → {e.State}: {e.Message}");
         }
 
@@ -68,6 +96,7 @@ namespace TurntableStudio.Services
         public void StartRotation()
         {
             EnsureConnected();
+            _prevAngleForIdle = double.NaN;
             _controller!.Start();
         }
 
@@ -80,6 +109,7 @@ namespace TurntableStudio.Services
         public void GoHome()
         {
             EnsureConnected();
+            _prevAngleForIdle = double.NaN;
             _controller!.GoHome();
         }
 
@@ -94,7 +124,7 @@ namespace TurntableStudio.Services
             EnsureConnected();
             _controller!.SetDirection(forward ? MovementDirection.Forward : MovementDirection.Reverse);
             _controller!.WriteTargetAngle((ushort)targetDeg);
-            _controller!.Start();
+            StartRotation();
         }
 
         public void Dispose()
