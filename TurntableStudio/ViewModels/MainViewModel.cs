@@ -369,6 +369,10 @@ namespace TurntableStudio.ViewModels
                     // 新 ABI：Initialize(sdkRoot) → GetDeviceDescriptor(index) → Connect(descriptor, interfaceType)
                     // sdkRoot 为 null 时 bridge 使用程序目录（Cr_Core.dll 与 SonyCrBridge.dll 同目录）
                     _camera.Initialize(null);
+                    // 枚举设备：SDK Initialize 完成后设备列表为空，必须先触发枚举再读取
+                    int count = _camera.GetDeviceCount();
+                    if (count == 0)
+                        throw new InvalidOperationException("未发现相机，请确认 USB 已连接且相机处于 PC Remote 模式");
                     desc = _camera.GetDeviceDescriptor(0);
                     _camera.Connect(desc, interfaceType: 0); // 0 = USB
                     count = 1;
