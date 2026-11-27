@@ -740,14 +740,16 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* le
             const CrInt32u imageSize = imageBlock.GetImageSize();
             if (imageSize == 0)
                 continue;
-            if (imageSize > liveViewBuffer.size() || imageSize > INT32_MAX ||
-                imageBlock.GetImageData() != liveViewBuffer.data())
+            const uint8_t* frameData = static_cast<const uint8_t*>(imageBlock.GetImageData());
+            if (frameData == nullptr || imageSize > INT32_MAX)
             {
                 state.SetError("Sony SDK returned an invalid Live View JPEG buffer.");
                 return CrBridge_Error_Sdk;
             }
 
-            *data   = liveViewBuffer.data();
+            // SDK may either fill our buffer or return its own internal pointer — both are valid
+            // and remain valid until the next GetLiveViewImage call (we copy in C# right away).
+            *data   = const_cast<uint8_t*>(frameData);
             *length = static_cast<int32_t>(imageSize);
             break;
         }
