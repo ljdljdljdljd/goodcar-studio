@@ -86,6 +86,7 @@ namespace TurntableStudio.Services
                     var motion = Stopwatch.StartNew();
                     _turntable.StartRotation();
                     await WaitForMotionAsync(previousAngle, motion, ct);
+                    await WaitAndStopAsync(previousAngle, stepAngle, ct);
                     double actualAngle = await WaitForRestAsync(targetAngle, ct);
                     if (Math.Abs(SignedDelta(previousAngle, actualAngle) - stepAngle) > TargetToleranceDeg)
                         throw new InvalidOperationException($"第 {index} 步实际步幅不符：{previousAngle:F1}° → {actualAngle:F1}°。");
@@ -127,6 +128,28 @@ namespace TurntableStudio.Services
             if (double.IsNaN(angle) || angle < 0 || angle >= 360)
                 throw new IOException($"无效的 PLC 角度读数：{angle}。");
             return angle;
+        }
+
+        private async Task WaitAndStopAsync(double previousAngle, double stepAngle, CancellationToken ct)
+        {
+            // 轮询角度，当已转过步幅的 80% 时发 StopRotation
+            // 防止转盘冲过目标太多
+            double stopThreshold = stepAngle * 0.80;
+            var clock = Stopwatch.StartNew();
+            while (clock.ElapsedMilliseconds < MotionSettleTimeoutMs)
+            {
+                ct.ThrowIfCancellationRequested();
+                double current = ReadAngle();
+                double traveled = SignedDelta(previousAngle, current);
+                if (traveled >= stopThreshold)
+                {
+                    _turntable.StopRotation();
+                    return;
+                }
+                await Task.Delay(SampleIntervalMs, ct);
+            }
+            // 超时仍未到 80%，强制停止
+            _turntable.StopRotation();
         }
 
         private async Task WaitForMotionAsync(double before, Stopwatch clock, CancellationToken ct)
