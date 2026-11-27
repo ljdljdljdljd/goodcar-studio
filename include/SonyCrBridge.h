@@ -36,7 +36,7 @@ enum CrBridgeResult
 };
 
 /*
- * ABI CONTRACT — matches Huateng.Turntable.Sdk.Internal.SonyDevice P/Invoke declarations exactly.
+ * ABI CONTRACT — Refactored v3.8+ (Nov 2026):
  *
  * CrBridge_Initialize  : sdkRoot = directory containing Cr_Core.dll (UTF-8).
  *                        May be NULL or empty → use current working directory.
@@ -44,12 +44,14 @@ enum CrBridgeResult
  *                        buffer/bufferSize follow the same two-pass pattern as Win32.
  * CrBridge_Connect     : descriptor = JSON string from GetDeviceDescriptor.
  *                        interfaceType: 0=USB, 1=WiredLan, 2=WiFi.
- * CrBridge_GetLiveViewJpeg : data points into an internal bridge-owned buffer valid until
- *                        the next GetLiveViewJpeg call on the same thread or that thread's exit;
- *                        copy on the calling thread and do NOT free it.
- *                        length receives the JPEG byte count (int32).
+ *                        Saves connection state for auto-reconnect (Task 2).
+ * CrBridge_GetLiveViewJpeg : CHANGED in v3.8 — caller provides buffer (buf, bufSize).
+ *                        Bridge fills it via memcpy, returns actual size in *imageSize.
+ *                        Eliminates cross-thread pointer race (Task 1).
+ *                        Uses independent liveViewMutex; no longer blocks during TakePicture (Task 3).
  * CrBridge_TakePicture : targetPath = full path where the captured JPEG should be saved.
  *                        timeoutMs  = max wait for file download (0 → 30 000 ms default).
+ *                        On timeout, automatically attempts reconnect once (Task 2).
  */
 
 /* Initialise the Sony Camera Remote SDK. Must be called once before all other functions. */
@@ -71,12 +73,15 @@ SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_Connect(
 /* Disconnect and release all SDK resources. */
 SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_Disconnect(void);
 
-/* Get one Live View JPEG frame.  *data points into an internal buffer (do NOT free).
-   *length receives the JPEG byte count. If no frame is ready, returns CrBridge_Ok
-   with *data == NULL and *length == 0. Errors return a negative code. */
+/* Get one Live View JPEG frame into caller-provided buffer.
+   buf must point to a buffer of at least bufSize bytes.
+   *imageSize receives the actual JPEG byte count written to buf.
+   Returns CrBridge_Error_InvalidArgument if bufSize is insufficient.
+   If no frame is ready, returns CrBridge_Ok with *imageSize == 0. */
 SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(
-    uint8_t** data,
-    int32_t*  length);
+    uint8_t* buf,
+    int32_t  bufSize,
+    int32_t* imageSize);
 
 /* Trigger the shutter and wait for the image file to be downloaded to targetPath.
    targetPath = full output path (UTF-8).  timeoutMs = 0 → 30 000 ms default. */

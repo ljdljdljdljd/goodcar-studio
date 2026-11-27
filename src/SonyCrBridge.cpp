@@ -78,6 +78,7 @@ public:
     BridgeState() : callback(*this) {}
 
     std::mutex apiMutex;
+    std::mutex liveViewMutex;      // Task 3: separate lock for LiveView, never nested with apiMutex
     std::mutex eventMutex;
     std::condition_variable eventChanged;
     std::mutex errorMutex;
@@ -95,9 +96,12 @@ public:
     uint64_t captureSequence = 0;
     bool captureNeedsReconnect = false;
 
+    // Task 2: auto-reconnect state
+    std::string lastDescriptorJson;
+    int32_t lastInterfaceType = 0;
+
     CameraCallback callback;
     std::string lastError;
-    std::vector<uint8_t> liveViewBuffer;
 
     void SetError(const std::string& message)
     {
@@ -180,6 +184,114 @@ public:
             SetError(message.str());
         }
         eventChanged.notify_all();
+    }
+
+    // Task 2: Attempt reconnect after capture timeout
+    void AttemptReconnect()
+    {
+        if (lastDescriptorJson.empty())
+        {
+            SetError("Cannot auto-reconnect: no previous connection descriptor saved.");
+            return;
+        }
+
+        SetError("Capture timeout; attempting auto-reconnect...");
+
+        // Step 1: Disconnect current handle
+        CrDeviceHandle handle = 0;
+        {
+            std::lock_guard<std::mutex> lock(eventMutex);
+            handle = deviceHandle;
+            connected = false;
+            connectPending = false;
+        }
+        if (handle != 0)
+        {
+            SCRSDK::Disconnect(handle);
+            SCRSDK::ReleaseDevice(handle);
+            std::lock_guard<std::mutex> lock(eventMutex);
+            deviceHandle = 0;
+        }
+
+        // Step 2: Wait briefly for clean disconnect
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        // Step 3: Refresh device list
+        if (devices != nullptr)
+        {
+            devices->Release();
+            devices = nullptr;
+        }
+        if (EnumCameraObjects(&devices, 3) != CrError_None)
+        {
+            SetError("Auto-reconnect failed: cannot enumerate cameras.");
+            return;
+        }
+
+        // Step 4: Find device by saved descriptor
+        const int32_t devIndex = FindDeviceByDescriptor(*this, lastDescriptorJson.c_str());
+        if (devIndex < 0 || devices == nullptr)
+        {
+            SetError("Auto-reconnect failed: camera not found.");
+            return;
+        }
+
+        const auto* device = devices->GetCameraObjectInfo(static_cast<CrInt32u>(devIndex));
+        if (device == nullptr)
+        {
+            SetError("Auto-reconnect failed: null device.");
+            return;
+        }
+
+        // Step 5: Connect
+        CrDeviceHandle newHandle = 0;
+        SCRSDK::ICrCameraObjectInfo* deviceMutable = const_cast<SCRSDK::ICrCameraObjectInfo*>(device);
+        {
+            std::lock_guard<std::mutex> lock(eventMutex);
+            connectPending = true;
+            disconnected = false;
+            callbackError = 0;
+        }
+        const CrError result = SCRSDK::Connect(deviceMutable, &callback, &newHandle);
+        if (result != CrError_None)
+        {
+            std::lock_guard<std::mutex> lock(eventMutex);
+            connectPending = false;
+            SetError("Auto-reconnect failed: SCRSDK::Connect error.");
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(eventMutex);
+            deviceHandle = newHandle;
+        }
+
+        // Step 6: Wait for OnConnected callback (shorter timeout: 8s)
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(8000);
+        {
+            std::unique_lock<std::mutex> lock(eventMutex);
+            const bool ok = eventChanged.wait_until(lock, deadline, [this] {
+                return connected || disconnected || callbackError != 0;
+            });
+            if (!ok || !connected)
+            {
+                connectPending = false;
+                connected = false;
+                lock.unlock();
+                SCRSDK::Disconnect(newHandle);
+                SCRSDK::ReleaseDevice(newHandle);
+                {
+                    std::lock_guard<std::mutex> l(eventMutex);
+                    deviceHandle = 0;
+                }
+                SetError("Auto-reconnect failed: connection timeout.");
+                return;
+            }
+        }
+
+        // Success: clear the reconnect flag
+        captureNeedsReconnect = false;
+        SetError("Auto-reconnect succeeded; camera ready.");
     }
 
     void NotifyError(CrInt32u error)
@@ -609,6 +721,9 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Connect(const char* descriptorJson, int32_t
             }
         }
 
+        // Task 2: Save connection parameters for auto-reconnect
+        state.lastDescriptorJson = descriptorJson ? descriptorJson : "";
+        state.lastInterfaceType = interfaceType;
         state.captureNeedsReconnect = false;
         state.ClearError();
         return CrBridge_Ok;
@@ -669,19 +784,18 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Disconnect(void)
     return CrBridge_Ok;
 }
 
-// CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* length)
-// *data points into an internal bridge-owned buffer.  Do NOT free it.
-// Valid until the next GetLiveViewJpeg call on the same thread or that thread's exit.
-int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* length)
+// CrBridge_GetLiveViewJpeg(uint8_t* buf, int32_t bufSize, int32_t* imageSize)
+// Task 1: caller-owned buffer — eliminates cross-thread pointer race
+int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t* buf, int32_t bufSize, int32_t* imageSize)
 {
-    if (data == nullptr || length == nullptr)
+    if (buf == nullptr || bufSize <= 0 || imageSize == nullptr)
         return CrBridge_Error_InvalidArgument;
 
-    *data = nullptr;
-    *length = 0;
+    *imageSize = 0;
 
     auto& state = State();
-    std::lock_guard<std::mutex> apiLock(state.apiMutex);
+    // Task 3: Use liveViewMutex instead of apiMutex to avoid blocking during TakePicture
+    std::lock_guard<std::mutex> lvLock(state.liveViewMutex);
     if (!state.initialized)
     {
         state.SetError("Call CrBridge_Initialize before using the bridge.");
@@ -695,7 +809,8 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* le
 
     try
     {
-        auto& liveViewBuffer = state.liveViewBuffer;
+        // Task 1: Use a temporary SDK-owned buffer for GetLiveViewImage, then memcpy to caller's buf
+        std::vector<uint8_t> tempBuffer;
         for (int attempt = 0; attempt <= kLiveViewRetries; ++attempt)
         {
             if (attempt != 0)
@@ -718,15 +833,15 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* le
                 return CrBridge_Error_Sdk;
             }
 
-            const CrInt32u bufferSize = imageInfo.GetBufferSize();
-            if (bufferSize == 0)
+            const CrInt32u requiredSize = imageInfo.GetBufferSize();
+            if (requiredSize == 0)
                 continue;
-            if (liveViewBuffer.size() < bufferSize)
-                liveViewBuffer.resize(bufferSize);
+            if (tempBuffer.size() < requiredSize)
+                tempBuffer.resize(requiredSize);
 
             CrImageDataBlock imageBlock{};
-            imageBlock.SetSize(static_cast<CrInt32u>(liveViewBuffer.size()));
-            imageBlock.SetData(liveViewBuffer.data());
+            imageBlock.SetSize(static_cast<CrInt32u>(tempBuffer.size()));
+            imageBlock.SetData(tempBuffer.data());
 
             result = SCRSDK::GetLiveViewImage(state.deviceHandle, &imageBlock);
             if (result == CrWarning_Frame_NotUpdated)
@@ -737,20 +852,25 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* le
                 return CrBridge_Error_Sdk;
             }
 
-            const CrInt32u imageSize = imageBlock.GetImageSize();
-            if (imageSize == 0)
+            const CrInt32u actualSize = imageBlock.GetImageSize();
+            if (actualSize == 0)
                 continue;
             const uint8_t* frameData = static_cast<const uint8_t*>(imageBlock.GetImageData());
-            if (frameData == nullptr || imageSize > INT32_MAX)
+            if (frameData == nullptr || actualSize > INT32_MAX)
             {
                 state.SetError("Sony SDK returned an invalid Live View JPEG buffer.");
                 return CrBridge_Error_Sdk;
             }
 
-            // SDK may either fill our buffer or return its own internal pointer — both are valid
-            // and remain valid until the next GetLiveViewImage call (we copy in C# right away).
-            *data   = const_cast<uint8_t*>(frameData);
-            *length = static_cast<int32_t>(imageSize);
+            // Task 1: Check caller's buffer size, then memcpy (no truncation)
+            if (static_cast<int32_t>(actualSize) > bufSize)
+            {
+                state.SetError("Caller's buffer too small for LiveView frame.");
+                return CrBridge_Error_InvalidArgument;
+            }
+
+            std::memcpy(buf, frameData, actualSize);
+            *imageSize = static_cast<int32_t>(actualSize);
             break;
         }
 
@@ -954,7 +1074,10 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_TakePictureEx(
                 const auto now = std::chrono::steady_clock::now();
                 if (now >= deadline)
                 {
-                    state.SetError("Timed out waiting for matching JPEG; camera must reconnect.");
+                    // Task 2: Attempt auto-reconnect on timeout
+                    eventLock.unlock();
+                    state.AttemptReconnect();
+                    state.SetError("Timed out waiting for matching JPEG after shutter; attempted auto-reconnect.");
                     return CrBridge_Error_Timeout;
                 }
                 state.eventChanged.wait_until(eventLock, std::min(deadline, now + std::chrono::milliseconds(50)));
