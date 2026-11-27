@@ -71,7 +71,7 @@ SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_Connect(
 /* Disconnect and release all SDK resources. */
 SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_Disconnect(void);
 
-/* Get one Live View JPEG frame.  *data points into an internal buffer (do NOT free).
+/* Get one Live View JPEG frame.  *data points to a heap-allocated copy (caller must call CrBridge_FreeBuffer).
    *length receives the JPEG byte count. If no frame is ready, returns CrBridge_Ok
    with *data == NULL and *length == 0. Errors return a negative code. */
 SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(
@@ -107,6 +107,10 @@ SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_SetSaveInfo(
 SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_LastError(
     char*   utf8Message,
     int32_t capacity);
+
+/* Free a buffer returned by CrBridge_GetLiveViewJpeg.
+   The bridge allocates each frame with new uint8_t[]; the caller must free it with this function. */
+SONY_CR_BRIDGE_API int32_t SONY_CR_BRIDGE_CALL CrBridge_FreeBuffer(uint8_t* data);
 
 #ifdef __cplusplus
 }
