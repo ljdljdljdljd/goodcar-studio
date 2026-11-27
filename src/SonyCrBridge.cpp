@@ -97,6 +97,7 @@ public:
 
     CameraCallback callback;
     std::string lastError;
+    std::vector<uint8_t> liveViewBuffer;
 
     void SetError(const std::string& message)
     {
@@ -608,9 +609,6 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Connect(const char* descriptorJson, int32_t
             }
         }
 
-        if (state.deviceHandle != 0)
-            SCRSDK::SetDeviceSetting(state.deviceHandle, Setting_Key_EnableLiveView, CrDeviceSetting_Enable);
-
         state.captureNeedsReconnect = false;
         state.ClearError();
         return CrBridge_Ok;
@@ -697,7 +695,7 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* le
 
     try
     {
-        static thread_local std::vector<uint8_t> liveViewBuffer;
+        auto& liveViewBuffer = state.liveViewBuffer;
         for (int attempt = 0; attempt <= kLiveViewRetries; ++attempt)
         {
             if (attempt != 0)
