@@ -21,6 +21,7 @@ namespace TurntableStudio.Services
         private long _prevAngleTickForIdle;
 
         public bool IsConnected { get; private set; }
+        public TurntableController? Controller => _controller;
         public event EventHandler<string>? StatusChanged;
 
         public void Connect(string plcIp, int port = 502, byte slaveId = 1)

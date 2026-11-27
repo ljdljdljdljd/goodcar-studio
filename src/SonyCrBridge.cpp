@@ -78,6 +78,7 @@ public:
     BridgeState() : callback(*this) {}
 
     std::mutex apiMutex;
+    std::mutex liveViewMutex;
     std::mutex eventMutex;
     std::condition_variable eventChanged;
     std::mutex errorMutex;
@@ -94,6 +95,9 @@ public:
     fs::path downloadedFile;
     uint64_t captureSequence = 0;
     bool captureNeedsReconnect = false;
+
+    std::string lastDescriptorJson;
+    int32_t lastInterfaceType = 0;
 
     CameraCallback callback;
     std::string lastError;
@@ -610,6 +614,8 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Connect(const char* descriptorJson, int32_t
         }
 
         state.captureNeedsReconnect = false;
+        state.lastDescriptorJson = descriptorJson != nullptr ? descriptorJson : "";
+        state.lastInterfaceType = interfaceType;
         state.ClearError();
         return CrBridge_Ok;
     }
@@ -670,8 +676,7 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_Disconnect(void)
 }
 
 // CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* length)
-// *data points into an internal bridge-owned buffer.  Do NOT free it.
-// Valid until the next GetLiveViewJpeg call on the same thread or that thread's exit.
+// *data points to a heap-allocated copy — caller MUST call CrBridge_FreeBuffer(data).
 int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* length)
 {
     if (data == nullptr || length == nullptr)
@@ -681,7 +686,7 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* le
     *length = 0;
 
     auto& state = State();
-    std::lock_guard<std::mutex> apiLock(state.apiMutex);
+    std::lock_guard<std::mutex> lvLock(state.liveViewMutex);
     if (!state.initialized)
     {
         state.SetError("Call CrBridge_Initialize before using the bridge.");
@@ -747,9 +752,10 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_GetLiveViewJpeg(uint8_t** data, int32_t* le
                 return CrBridge_Error_Sdk;
             }
 
-            // SDK may either fill our buffer or return its own internal pointer — both are valid
-            // and remain valid until the next GetLiveViewImage call (we copy in C# right away).
-            *data   = const_cast<uint8_t*>(frameData);
+            // Heap-allocate a copy for the caller — they must call CrBridge_FreeBuffer
+            uint8_t* copy = new uint8_t[imageSize];
+            std::memcpy(copy, frameData, imageSize);
+            *data   = copy;
             *length = static_cast<int32_t>(imageSize);
             break;
         }
@@ -946,6 +952,7 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_TakePictureEx(
         const auto deadline = std::chrono::steady_clock::now()
                             + std::chrono::milliseconds(waitMs);
         fs::path downloadedPath;
+        bool timedOut = false;
         {
             std::unique_lock<std::mutex> eventLock(state.eventMutex);
             while (state.downloadedFile.empty() && state.connected && state.callbackError == 0)
@@ -954,18 +961,116 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_TakePictureEx(
                 const auto now = std::chrono::steady_clock::now();
                 if (now >= deadline)
                 {
-                    state.SetError("Timed out waiting for matching JPEG; camera must reconnect.");
-                    return CrBridge_Error_Timeout;
+                    timedOut = true;
+                    break;
                 }
                 state.eventChanged.wait_until(eventLock, std::min(deadline, now + std::chrono::milliseconds(50)));
             }
-            if (canceled()) return CrBridge_Error_Canceled;
-            if (!state.connected || state.callbackError != 0)
+            if (timedOut)
+            {
+                state.SetError("Timed out waiting for matching JPEG; attempting reconnect.");
+            }
+            else if (canceled()) return CrBridge_Error_Canceled;
+            else if (!state.connected || state.callbackError != 0)
             {
                 state.SetError("Camera disconnected or reported an error during image download.");
                 return CrBridge_Error_Sdk;
             }
-            downloadedPath = state.downloadedFile;
+            else
+            {
+                downloadedPath = state.downloadedFile;
+            }
+        }
+
+        if (timedOut)
+        {
+            if (state.lastDescriptorJson.empty())
+            {
+                state.SetError("Cannot reconnect: no descriptor saved.");
+                return CrBridge_Error_Timeout;
+            }
+
+            CrDeviceHandle oldHandle = 0;
+            {
+                std::lock_guard<std::mutex> lock(state.eventMutex);
+                oldHandle = state.deviceHandle;
+                state.deviceHandle = 0;
+                state.connected = false;
+            }
+            if (oldHandle != 0)
+            {
+                SCRSDK::Disconnect(oldHandle);
+                SCRSDK::ReleaseDevice(oldHandle);
+            }
+
+            if (!state.RefreshDevices())
+            {
+                state.SetError("Reconnect: device enumeration failed.");
+                return CrBridge_Error_Timeout;
+            }
+
+            const int32_t devIndex = FindDeviceByDescriptor(state, state.lastDescriptorJson.c_str());
+            if (devIndex < 0)
+            {
+                state.SetError("Reconnect: device not found.");
+                return CrBridge_Error_Timeout;
+            }
+
+            const auto* device = state.devices->GetCameraObjectInfo(static_cast<CrInt32u>(devIndex));
+            if (device == nullptr)
+            {
+                state.SetError("Reconnect: null device.");
+                return CrBridge_Error_Timeout;
+            }
+
+            CrDeviceHandle newHandle = 0;
+            {
+                std::lock_guard<std::mutex> lock(state.eventMutex);
+                state.connectPending = true;
+                state.disconnected = false;
+                state.callbackError = 0;
+            }
+
+            SCRSDK::ICrCameraObjectInfo* deviceMutable = const_cast<SCRSDK::ICrCameraObjectInfo*>(device);
+            const CrError connectResult = SCRSDK::Connect(deviceMutable, &state.callback, &newHandle);
+            if (connectResult != CrError_None)
+            {
+                std::lock_guard<std::mutex> lock(state.eventMutex);
+                state.connectPending = false;
+                state.SetError("Reconnect: SCRSDK::Connect failed.");
+                return CrBridge_Error_Timeout;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(state.eventMutex);
+                state.deviceHandle = newHandle;
+            }
+
+            const auto reconnectDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(8000);
+            {
+                std::unique_lock<std::mutex> lock(state.eventMutex);
+                const bool ok = state.eventChanged.wait_until(lock, reconnectDeadline, [&state] {
+                    return state.connected || state.disconnected || state.callbackError != 0;
+                });
+                if (!ok || !state.connected)
+                {
+                    state.connectPending = false;
+                    state.connected = false;
+                    lock.unlock();
+                    SCRSDK::Disconnect(newHandle);
+                    SCRSDK::ReleaseDevice(newHandle);
+                    {
+                        std::lock_guard<std::mutex> l(state.eventMutex);
+                        state.deviceHandle = 0;
+                    }
+                    state.SetError("Reconnect: OnConnected timeout.");
+                    return CrBridge_Error_Timeout;
+                }
+            }
+
+            state.captureNeedsReconnect = false;
+            state.SetError("Timeout; reconnected successfully but image was lost.");
+            return CrBridge_Error_Timeout;
         }
         state.captureNeedsReconnect = false;
 
@@ -1001,6 +1106,14 @@ int32_t SONY_CR_BRIDGE_CALL CrBridge_LastError(char* utf8Message, int32_t capaci
 {
     try { return CopyUtf8String(State().GetError(), utf8Message, capacity); }
     catch (...) { return CatchException("CrBridge_LastError"); }
+}
+
+// CrBridge_FreeBuffer(uint8_t* data)
+// Free a buffer returned by CrBridge_GetLiveViewJpeg.
+int32_t SONY_CR_BRIDGE_CALL CrBridge_FreeBuffer(uint8_t* data)
+{
+    delete[] data;
+    return CrBridge_Ok;
 }
 
 } // extern "C"

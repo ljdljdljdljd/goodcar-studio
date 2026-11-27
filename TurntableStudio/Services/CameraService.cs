@@ -47,6 +47,9 @@ namespace TurntableStudio.Services
         [DllImport(BridgeDll, CallingConvention = CallingConvention.Cdecl)]
         private static extern int CrBridge_GetLiveViewJpeg(out IntPtr data, out int length);
 
+        [DllImport(BridgeDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int CrBridge_FreeBuffer(IntPtr data);
+
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int ShouldCancel();
 
@@ -143,17 +146,26 @@ namespace TurntableStudio.Services
 
         /// <summary>
         /// 获取当前一帧 LiveView JPEG 字节数组。
-        /// 数据来自 bridge 内部缓冲区，每次调用都会刷新，请及时复制。
+        /// Bridge 返回堆分配拷贝，调用后必须释放。
         /// </summary>
         public byte[]? GetLiveViewJpeg()
         {
-            int result = CrBridge_GetLiveViewJpeg(out IntPtr data, out int length);
+            IntPtr data = IntPtr.Zero;
+            int length = 0;
+            int result = CrBridge_GetLiveViewJpeg(out data, out length);
             if (result == -3)
                 throw new InvalidOperationException("相机已断开，请重新连接。");
             if (result < 0 || data == IntPtr.Zero || length <= 0) return null;
-            var bytes = new byte[length];
-            Marshal.Copy(data, bytes, 0, length);
-            return bytes;
+            try
+            {
+                var bytes = new byte[length];
+                Marshal.Copy(data, bytes, 0, length);
+                return bytes;
+            }
+            finally
+            {
+                CrBridge_FreeBuffer(data);
+            }
         }
 
         /// <summary>

@@ -45,6 +45,7 @@ namespace TurntableStudio.ViewModels
         private readonly TurntableService _turntable;
         private readonly CameraService _camera = new();
         private readonly Func<bool>? _readPlcIdle;
+        private readonly CaptureOrchestrator? _orchestrator;
         private CancellationTokenSource? _captureCts;
         private CancellationTokenSource? _manualMoveCts;
         private DispatcherTimer? _liveViewTimer;
@@ -152,6 +153,16 @@ namespace TurntableStudio.ViewModels
         public ObservableCollection<int> ShotCountOptions { get; } = new() { 72, 36 };
         public string StepAngle => $"{360.0 / _selectedShotCount:F1}° / 张";
 
+        private double _leadAngle = 0.5;
+        public double LeadAngle
+        {
+            get => _leadAngle;
+            set => Set(ref _leadAngle, Math.Max(0.1, Math.Min(2.0, Math.Round(value, 1))));
+        }
+
+        private string _cameraModel = "未连接";
+        public string CameraModel { get => _cameraModel; private set => Set(ref _cameraModel, value); }
+
         // ── 角度 ─────────────────────────────────────────────────────
         private double _currentAngle;
         public double CurrentAngle
@@ -162,10 +173,12 @@ namespace TurntableStudio.ViewModels
                 Set(ref _currentAngle, value);
                 OnPropertyChanged(nameof(CurrentAngleText));
                 OnPropertyChanged(nameof(DialRotation));
+                OnPropertyChanged(nameof(AngleStatusText));
             }
         }
         public string CurrentAngleText => $"{_currentAngle:F1}°";
         public double DialRotation => _currentAngle; // 供 XAML RotateTransform 使用
+        public string AngleStatusText => PlcConnected ? $"{_currentAngle:F1}°" : "—";
 
         // ── 进度 ─────────────────────────────────────────────────────
         private int _progressCurrent;
@@ -220,8 +233,10 @@ namespace TurntableStudio.ViewModels
         private BitmapImage? _liveViewImage;
         public BitmapImage? LiveViewImage { get => _liveViewImage; private set => Set(ref _liveViewImage, value); }
 
-        // ── 日志流 ───────────────────────────────────────────────────
-        public ObservableCollection<LogEntry> LogEntries { get; } = new();
+        // ── 日志流（拆分为两个独立集合）────────────────────────────────
+        public ObservableCollection<LogEntry> AutoCaptureLog { get; } = new();
+        public ObservableCollection<LogEntry> TurntableLog { get; } = new();
+        public ObservableCollection<LogEntry> LogEntries => AutoCaptureLog;  // 兼容别名
 
         // ── 缩略图预览 ───────────────────────────────────────────────
         public ObservableCollection<ShotThumbnailItem> ShotThumbnails { get; } = new();
@@ -265,9 +280,10 @@ namespace TurntableStudio.ViewModels
         public ICommand StopRotationCommand  { get; }
         public ICommand GoHomeCommand        { get; }
         public ICommand ManualForwardCommand { get; }
-        public ICommand ManualReverseCommand { get; }
-        public ICommand MoveForwardCommand   { get; }
-        public ICommand MoveReverseCommand   { get; }
+        public ICommand ManualReverseCommand   { get; }
+        public ICommand MoveForwardCommand     { get; }
+        public ICommand MoveReverseCommand     { get; }
+        public ICommand ReconnectCameraCommand { get; }
 
         public MainViewModel() : this(null) { }
 
@@ -277,21 +293,31 @@ namespace TurntableStudio.ViewModels
         {
             _turntable = turntable;
             _readPlcIdle = readPlcIdle;
-            _turntable.StatusChanged += (_, msg) => AddLog(msg, LogLevel.Info);
+            _turntable.StatusChanged += (_, msg) => AddLog(msg, LogLevel.Info, turntable: false);
 
-            ConnectPlcCommand     = new AsyncRelayCommand(() => RunDeviceAsync(ConnectPlcAsync));
-            ConnectCameraCommand  = new AsyncRelayCommand(() => RunDeviceAsync(ConnectCameraAsync));
-            StartStopCommand      = new RelayCommand(_ => StartOrCancelCapture());
-            ToggleLiveViewCommand = new AsyncRelayCommand(() => RunDeviceAsync(ToggleLiveViewAsync));
-            BrowseFolderCommand   = new RelayCommand(BrowseFolder);
-            WriteParamsCommand    = new AsyncRelayCommand(() => RunDeviceAsync(WriteParamsAsync));
-            StartRotationCommand  = new AsyncRelayCommand(() => RunDeviceAsync(() => StartRotationAsync(IsForwardDirection)));
-            StopRotationCommand   = new AsyncRelayCommand(StopOrCancelAsync);
-            GoHomeCommand         = new AsyncRelayCommand(() => RunDeviceAsync(GoHomeAsync));
-            ManualForwardCommand  = new AsyncRelayCommand(() => RunDeviceAsync(() => StartRotationAsync(true)));
-            ManualReverseCommand  = new AsyncRelayCommand(() => RunDeviceAsync(() => StartRotationAsync(false)));
-            MoveForwardCommand    = new AsyncRelayCommand(() => MoveToAngleAsync(true));
-            MoveReverseCommand    = new AsyncRelayCommand(() => MoveToAngleAsync(false));
+            if (_turntable.Controller != null && _camera != null)
+            {
+                try
+                {
+                    _orchestrator = new CaptureOrchestrator(_turntable.Controller, null!);
+                }
+                catch { /* CaptureJob 初始化依赖 UI 线程，构造时 Controller 可能未连接 */ }
+            }
+
+            ConnectPlcCommand       = new AsyncRelayCommand(() => RunDeviceAsync(ConnectPlcAsync));
+            ConnectCameraCommand    = new AsyncRelayCommand(() => RunDeviceAsync(ConnectCameraAsync));
+            ReconnectCameraCommand  = new AsyncRelayCommand(() => RunDeviceAsync(ReconnectCameraAsync));
+            StartStopCommand        = new RelayCommand(_ => StartOrCancelCapture());
+            ToggleLiveViewCommand   = new AsyncRelayCommand(() => RunDeviceAsync(ToggleLiveViewAsync));
+            BrowseFolderCommand     = new RelayCommand(BrowseFolder);
+            WriteParamsCommand      = new AsyncRelayCommand(() => RunDeviceAsync(WriteParamsAsync));
+            StartRotationCommand    = new AsyncRelayCommand(() => RunDeviceAsync(() => StartRotationAsync(IsForwardDirection)));
+            StopRotationCommand     = new AsyncRelayCommand(StopOrCancelAsync);
+            GoHomeCommand           = new AsyncRelayCommand(() => RunDeviceAsync(GoHomeAsync));
+            ManualForwardCommand    = new AsyncRelayCommand(() => RunDeviceAsync(() => StartRotationAsync(true)));
+            ManualReverseCommand    = new AsyncRelayCommand(() => RunDeviceAsync(() => StartRotationAsync(false)));
+            MoveForwardCommand      = new AsyncRelayCommand(() => MoveToAngleAsync(true));
+            MoveReverseCommand      = new AsyncRelayCommand(() => MoveToAngleAsync(false));
         }
 
         private void RefreshDeviceGuards()
@@ -378,10 +404,24 @@ namespace TurntableStudio.ViewModels
                     count = 1;
                 });
                 CameraConnected = true;
+                CameraModel = "Sony α7R IV";  // TODO: 从 SDK descriptor JSON 提取 model 字段
                 AddLog($"相机连接成功（共 {count} 台）", LogLevel.Success);
                 AddLog($"设备：{desc}", LogLevel.Info);
             }
             catch (Exception ex) { AddLog($"相机连接失败：{ex.Message}", LogLevel.Error); }
+        }
+
+        private async Task ReconnectCameraAsync()
+        {
+            await StopLiveViewAsync();
+            try
+            {
+                await Task.Run(() => _camera.Disconnect());
+                CameraConnected = false;
+                AddLog("相机已断开", LogLevel.Warning);
+            }
+            catch { }
+            await ConnectCameraAsync();
         }
 
         // ── 开始 / 停止拍摄 ──────────────────────────────────────────
@@ -427,37 +467,42 @@ namespace TurntableStudio.ViewModels
                 AddLog("请先指定保存目录", LogLevel.Warning); return;
             }
 
+            if (_orchestrator == null)
+            {
+                AddLog("编排器未初始化", LogLevel.Error);
+                return;
+            }
+
             UI(() => ShotThumbnails.Clear());
             ProgressCurrent = 0;
             ProgressTotal   = SelectedShotCount;
 
-            var orchestrator = new CaptureOrchestrator(_turntable, _camera, _readPlcIdle);
-            orchestrator.Progress += (_, e) => UI(() =>
-            {
-                ProgressCurrent = e.Current;
-                ProgressTotal   = e.Total;
+            _orchestrator.Progress += OnCaptureProgress;
+            _orchestrator.Log += OnCaptureLog;
 
-                try
+            void OnCaptureProgress(object? sender, CaptureProgressEventArgs e)
+            {
+                UI(() =>
                 {
-                    var runFolder = Directory.GetDirectories(SaveFolder, "run_*")
-                        .OrderByDescending(d => Directory.GetCreationTime(d)).FirstOrDefault();
-                    if (runFolder != null && !string.IsNullOrEmpty(e.FileName))
+                    ProgressCurrent = e.Current;
+                    ProgressTotal   = e.Total;
+                    if (!string.IsNullOrEmpty(e.FileName))
                     {
-                        string fullPath = Path.Combine(runFolder, e.FileName);
-                        double angle = (e.Current * 360.0 / e.Total) % 360.0;
+                        string fullPath = Path.Combine(SaveFolder, e.FileName);
+                        double angle = double.TryParse(e.ActualAngleText.TrimEnd('°'), out var a) ? a : 0;
                         AddShotThumbnail(e.Current, angle, fullPath);
                     }
-                }
-                catch { /* 缩略图加载失败不影响拍摄 */ }
-            });
-            orchestrator.Log += (_, msg) =>
+                });
+            }
+
+            void OnCaptureLog(object? sender, string msg)
             {
-                var level = msg.StartsWith("  ✓") ? LogLevel.Success
-                           : msg.StartsWith("  ✗") || msg.StartsWith("✗") ? LogLevel.Error
-                           : msg.StartsWith("  ⚠") || msg.StartsWith("⚠") ? LogLevel.Warning
+                var level = msg.StartsWith("✓") ? LogLevel.Success
+                           : msg.StartsWith("✗") ? LogLevel.Error
+                           : msg.StartsWith("⚠") ? LogLevel.Warning
                            : LogLevel.Info;
                 AddLog(msg, level);
-            };
+            }
 
             try
             {
@@ -466,7 +511,7 @@ namespace TurntableStudio.ViewModels
                 int count = SelectedShotCount;
                 string folder = SaveFolder;
                 AddLog($"开始精拍 {count} 张 → {folder}", LogLevel.Info);
-                await Task.Run(() => orchestrator.RunAsync(count, folder, "Shot", ct), ct);
+                await _orchestrator.RunAsync(count, folder, _leadAngle, ct);
                 AddLog($"拍摄完成，共 {ProgressCurrent} 张", LogLevel.Success);
             }
             catch (OperationCanceledException) { AddLog("拍摄已取消", LogLevel.Warning); }
@@ -476,6 +521,11 @@ namespace TurntableStudio.ViewModels
                 AddLog($"拍摄出错：{ex}", LogLevel.Error);
             }
             catch (Exception ex) { AddLog($"拍摄出错：{ex.Message}", LogLevel.Error); }
+            finally
+            {
+                _orchestrator.Progress -= OnCaptureProgress;
+                _orchestrator.Log -= OnCaptureLog;
+            }
         }
 
         // ── 实时取景 ─────────────────────────────────────────────────
@@ -546,7 +596,7 @@ namespace TurntableStudio.ViewModels
             _angleTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
             _angleTimer.Tick += (_, _) =>
             {
-                if (!_closing && !_deviceBusy && PlcConnected && _anglePoll.IsCompleted)
+                if (!_closing && PlcConnected && _anglePoll.IsCompleted)
                     _anglePoll = PollAngleAsync();
             };
             _angleTimer.Start();
@@ -588,25 +638,25 @@ namespace TurntableStudio.ViewModels
         // ── 转盘手动控制方法 ─────────────────────────────────────────
         private async Task WriteParamsAsync()
         {
-            if (!PlcConnected) { AddLog("请先连接 PLC", LogLevel.Warning); return; }
+            if (!PlcConnected) { AddLog("请先连接 PLC", LogLevel.Warning, turntable: true); return; }
             try
             {
                 await Task.Run(() => _turntable.Configure(TurntableSpeed, TurntablePulse, TurntableAccelDecel));
-                AddLog($"参数已写入：速度 {TurntableSpeed} / 脉冲 {TurntablePulse} / 加减速 {TurntableAccelDecel} ms", LogLevel.Success);
+                AddLog($"参数已写入：速度 {TurntableSpeed} / 脉冲 {TurntablePulse} / 加减速 {TurntableAccelDecel} ms", LogLevel.Success, turntable: true);
             }
-            catch (Exception ex) { AddLog($"写入参数失败：{ex.Message}", LogLevel.Error); }
+            catch (Exception ex) { AddLog($"写入参数失败：{ex.Message}", LogLevel.Error, turntable: true); }
         }
 
         private async Task StartRotationAsync(bool forward)
         {
-            if (!PlcConnected) { AddLog("请先连接 PLC", LogLevel.Warning); return; }
+            if (!PlcConnected) { AddLog("请先连接 PLC", LogLevel.Warning, turntable: true); return; }
             _manualMotionMayBeActive = true;
             try
             {
                 await Task.Run(() => { _turntable.SetDirection(forward); _turntable.StartRotation(); });
-                AddLog($"已发送{(forward ? "正转" : "反转")}启动指令", LogLevel.Success);
+                AddLog($"已发送{(forward ? "正转" : "反转")}启动指令", LogLevel.Success, turntable: true);
             }
-            catch (Exception ex) { AddLog($"启动失败：{ex.Message}", LogLevel.Error); }
+            catch (Exception ex) { AddLog($"启动失败：{ex.Message}", LogLevel.Error, turntable: true); }
         }
 
         private async Task StopOrCancelAsync()
@@ -626,7 +676,7 @@ namespace TurntableStudio.ViewModels
             _manualMotionMayBeActive = true;
             await Task.Run(() => _turntable.StopRotation());
             _manualMotionMayBeActive = false;
-            AddLog("已发送转盘停止指令。", LogLevel.Info);
+            AddLog("已发送转盘停止指令。", LogLevel.Info, turntable: true);
         }
 
         private async Task GoHomeAsync()
@@ -638,9 +688,9 @@ namespace TurntableStudio.ViewModels
             {
                 _manualMotionMayBeActive = true;
                 await Task.Run(() => _turntable.GoHome());
-                AddLog("回零指令已发送", LogLevel.Success);
+                AddLog("回零指令已发送", LogLevel.Success, turntable: true);
             }
-            catch (Exception ex) { AddLog($"回零失败：{ex.Message}", LogLevel.Error); }
+            catch (Exception ex) { AddLog($"回零失败：{ex.Message}", LogLevel.Error, turntable: true); }
         }
 
         private async Task MoveToAngleAsync(bool forward)
@@ -667,36 +717,37 @@ namespace TurntableStudio.ViewModels
                     await Task.Run(() => _turntable.MoveToAsync(targetAngle, forward, toleranceDeg: 1.0,
                         timeoutMs: 30000, ct: cts.Token));
                     _manualMotionMayBeActive = false;
-                    AddLog($"已到达目标角度 {targetAngle:F1}°（{(forward ? "正转" : "反转")}）", LogLevel.Success);
+                    AddLog($"已到达目标角度 {targetAngle:F1}°（{(forward ? "正转" : "反转")}）", LogLevel.Success, turntable: true);
                 }
                 catch (TimeoutException ex)
                 {
                     _manualMotionMayBeActive = false;
-                    AddLog($"移动超时：{ex.Message}", LogLevel.Error);
+                    AddLog($"移动超时：{ex.Message}", LogLevel.Error, turntable: true);
                 }
                 catch (OperationCanceledException)
                 {
                     _manualMotionMayBeActive = false;
-                    AddLog("移动已取消", LogLevel.Warning);
+                    AddLog("移动已取消", LogLevel.Warning, turntable: true);
                 }
-                catch (Exception ex) { AddLog($"移动到目标角度失败：{ex.Message}", LogLevel.Error); }
+                catch (Exception ex) { AddLog($"移动到目标角度失败：{ex.Message}", LogLevel.Error, turntable: true); }
             }
         }
 
-        // ── 彩色日志追加 ─────────────────────────────────────────────
-        private void AddLog(string message, LogLevel level)
+        // ── 彩色日志追加（支持双流拆分）─────────────────────────────────
+        private void AddLog(string message, LogLevel level, bool turntable = false)
         {
             UI(() =>
             {
-                LogEntries.Insert(0, new LogEntry
+                var entry = new LogEntry
                 {
                     Time    = DateTime.Now.ToString("HH:mm:ss"),
                     Message = message,
                     Level   = level,
-                });
-                // 只保留最近 200 条
-                while (LogEntries.Count > 200)
-                    LogEntries.RemoveAt(LogEntries.Count - 1);
+                };
+                var target = turntable ? TurntableLog : AutoCaptureLog;
+                target.Insert(0, entry);
+                while (target.Count > 300)
+                    target.RemoveAt(target.Count - 1);
             });
         }
 
