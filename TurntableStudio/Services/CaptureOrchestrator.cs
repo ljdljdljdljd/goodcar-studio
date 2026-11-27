@@ -38,17 +38,17 @@ namespace TurntableStudio.Services
             {
                 Progress?.Invoke(this, new CaptureProgressEventArgs
                 {
-                    Current = e.Current,
-                    Total = e.Total,
-                    FileName = e.FileName ?? string.Empty,
-                    ActualAngleText = $"{e.ActualAngle:F1}°"
+                    Current = e.ShotIndex,
+                    Total = e.ShotCount,
+                    FileName = e.LastFile ?? string.Empty,
+                    ActualAngleText = $"{e.TraveledAngle:F1}°"
                 });
-                Log?.Invoke(this, $"  [{e.Current}/{e.Total}] {e.FileName} @ {e.ActualAngle:F1}°");
+                Log?.Invoke(this, $"  [{e.ShotIndex}/{e.ShotCount}] {e.LastFile} @ {e.TraveledAngle:F1}°");
             };
 
             _job.Error += (sender, e) =>
             {
-                Log?.Invoke(this, $"✗ SDK 错误：{e.Message}");
+                Log?.Invoke(this, $"✗ SDK 错误：{e}");
             };
 
             _job.Finished += (sender, e) =>
@@ -56,7 +56,7 @@ namespace TurntableStudio.Services
                 if (e.Cancelled)
                     Log?.Invoke(this, "⚠ 拍摄已取消");
                 else
-                    Log?.Invoke(this, $"✓ 拍摄完成，共 {e.SavedCount}/{e.TotalCount} 张");
+                    Log?.Invoke(this, $"✓ 拍摄完成，共 {e.Saved}/{e.Saved + e.Skipped} 张");
                 Finished?.Invoke(this, e.Cancelled);
             };
         }
