@@ -210,9 +210,9 @@ public:
                 return ch >= 'A' && ch <= 'Z' ? ch - 'A' + 'a' : ch;
             });
             if (extension != ".jpg" && extension != ".jpeg") return;
-            const auto expected = downloadDirectory / reported.filename();
-            if (reported.has_parent_path() && reported.lexically_normal() != expected) return;
-            downloadedFile = expected;
+            // Accept the file regardless of which directory the SDK placed it in —
+            // path case/slash differences on Windows cause lexically_normal mismatches.
+            downloadedFile = downloadDirectory / reported.filename();
         }
         eventChanged.notify_all();
     }
