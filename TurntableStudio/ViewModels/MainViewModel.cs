@@ -514,11 +514,6 @@ namespace TurntableStudio.ViewModels
                 await _orchestrator.RunAsync(count, folder, _leadAngle, ct);
                 AddLog($"拍摄完成，共 {ProgressCurrent} 张", LogLevel.Success);
             }
-            finally
-            {
-                _orchestrator.Progress -= OnCaptureProgress;
-                _orchestrator.Log -= OnCaptureLog;
-            }
             catch (OperationCanceledException) { AddLog("拍摄已取消", LogLevel.Warning); }
             catch (AggregateException ex)
             {
@@ -526,6 +521,11 @@ namespace TurntableStudio.ViewModels
                 AddLog($"拍摄出错：{ex}", LogLevel.Error);
             }
             catch (Exception ex) { AddLog($"拍摄出错：{ex.Message}", LogLevel.Error); }
+            finally
+            {
+                _orchestrator.Progress -= OnCaptureProgress;
+                _orchestrator.Log -= OnCaptureLog;
+            }
         }
 
         // ── 实时取景 ─────────────────────────────────────────────────
