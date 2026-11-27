@@ -81,21 +81,23 @@ namespace TurntableStudio.Services
 
             var tcs = new TaskCompletionSource<bool>();
 
-            void OnFinished(object? sender, bool cancelled)
+            void OnFinished(object? sender, CaptureJobResultEventArgs e)
             {
                 _job.Finished -= OnFinished;
-                tcs.TrySetResult(cancelled);
+                _job.Error   -= OnError;
+                if (e.Cancelled) tcs.TrySetCanceled();
+                else tcs.TrySetResult(true);
             }
 
-            void OnError(object? sender, CaptureJobErrorEventArgs e)
+            void OnError(object? sender, string msg)
             {
-                _job.Error -= OnError;
+                _job.Error   -= OnError;
                 _job.Finished -= OnFinished;
-                tcs.TrySetException(new InvalidOperationException(e.Message));
+                tcs.TrySetException(new InvalidOperationException(msg));
             }
 
             _job.Finished += OnFinished;
-            _job.Error += OnError;
+            _job.Error    += OnError;
 
             ct.Register(() =>
             {
