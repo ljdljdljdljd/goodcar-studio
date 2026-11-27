@@ -13,6 +13,7 @@
         <!-- 颜色令牌 (Catppuccin Mocha) -->
         <SolidColorBrush x:Key="BgBase" Color="#1E1E2E"/>
         <SolidColorBrush x:Key="BgSecondary" Color="#181825"/>
+        <SolidColorBrush x:Key="BgTertiary" Color="#313244"/>
         <SolidColorBrush x:Key="BgCard" Color="#313244"/>
         <SolidColorBrush x:Key="Border" Color="#45475A"/>
         <SolidColorBrush x:Key="TextPrimary" Color="#CDD6F4"/>
@@ -219,6 +220,11 @@
                     <TextBlock Text="相机" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,6,0"/>
                     <Ellipse Fill="{Binding CameraStatusColor}" Style="{StaticResource StatusDot}"/>
                     <TextBlock Text="{Binding CameraStatusText}" VerticalAlignment="Center" Foreground="{StaticResource TextSecondary}"/>
+
+                    <Rectangle Width="1" Fill="{StaticResource Border}" Margin="12,4" VerticalAlignment="Stretch"/>
+                    <TextBlock Text="角度 " Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding AngleStatusText}" Foreground="{StaticResource SuccessGreen}"
+                               FontWeight="Bold" VerticalAlignment="Center" MinWidth="52"/>
                 </StackPanel>
                 <TextBlock Text="GoodCar 影棚拍摄系统 v3.0" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="#6C7086" FontSize="12"/>
             </Grid>
@@ -269,7 +275,7 @@
         </Border>
 
         <!-- ══════════════════════════════════════════════════════════════
-             TabControl：自动拍摄 | 转盘控制
+             TabControl：自动拍摄 | 转盘控制 | 相机
              ══════════════════════════════════════════════════════════════ -->
         <TabControl Background="{StaticResource BgBase}" BorderThickness="0">
             <TabControl.Resources>
@@ -532,6 +538,21 @@
                             <TextBlock Text="步进角度" Style="{StaticResource Label}"/>
                             <TextBlock Text="{Binding StepAngle}" Foreground="{StaticResource TextPrimary}" FontSize="13" Margin="0,4,0,0"/>
 
+                            <TextBlock Text="提前触发量 (°)" Style="{StaticResource Label}" Margin="0,12,0,4"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="44"/>
+                                </Grid.ColumnDefinitions>
+                                <Slider Minimum="0.1" Maximum="2.0" SmallChange="0.1" LargeChange="0.5"
+                                        IsSnapToTickEnabled="True" TickFrequency="0.1"
+                                        Value="{Binding LeadAngle}" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" Text="{Binding LeadAngle, StringFormat='{}{0:F1}°'}"
+                                           Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" TextAlignment="Right"/>
+                            </Grid>
+                            <TextBlock Text="角度偏后时增大（建议 0.3~1.0°）"
+                                       Foreground="{StaticResource TextSecondary}" FontSize="11" Margin="0,2,0,0"/>
+
                             <TextBlock Text="照片保存目录" Style="{StaticResource Label}"/>
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -570,9 +591,9 @@
                     <!-- ⑤ 彩色日志流（ItemsControl 绑定 LogEntries，Color 属性绑定到 Foreground）-->
                     <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="12">
                         <StackPanel>
-                            <TextBlock Text="运行日志" FontWeight="Bold" FontSize="14" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,8"/>
+                            <TextBlock Text="拍摄日志" FontWeight="Bold" FontSize="14" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,8"/>
                             <ScrollViewer Height="280" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                <ItemsControl ItemsSource="{Binding LogEntries}">
+                                <ItemsControl ItemsSource="{Binding AutoCaptureLog}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <TextBlock Foreground="{Binding Color}" FontSize="11" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,1">
@@ -714,11 +735,145 @@
                             <StackPanel>
                                 <TextBlock Text="运行日志" FontWeight="Bold" FontSize="16" Foreground="{StaticResource BrandPurple}" Margin="0,0,0,8"/>
                                 <ScrollViewer Height="200" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                    <ItemsControl ItemsSource="{Binding LogEntries}">
+                                    <ItemsControl ItemsSource="{Binding TurntableLog}">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
                                                 <TextBlock Foreground="{Binding Color}" FontSize="11" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,1">
                                                     <Run Text="{Binding Time, Mode=OneWay}"/><Run Text=" "/><Run Text="{Binding Message, Mode=OneWay}"/>
+                                                </TextBlock>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </StackPanel>
+                        </Border>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ══════════════════════════════════════════════════════════════
+                 Tab 3: 相机状态
+                 ══════════════════════════════════════════════════════════════ -->
+            <TabItem Header="相机">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="20" MaxWidth="680">
+
+                        <!-- 相机信息卡 -->
+                        <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="16" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="相机信息" FontWeight="Bold" FontSize="16"
+                                           Foreground="{StaticResource BrandPurple}" Margin="0,0,0,12"/>
+                                <Grid Margin="0,0,0,16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="96"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition MinHeight="28"/>
+                                        <RowDefinition MinHeight="28"/>
+                                        <RowDefinition MinHeight="28"/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="型号" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding CameraModel}"
+                                               Foreground="{StaticResource TextPrimary}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="连接状态" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Ellipse Width="8" Height="8" Fill="{Binding CameraStatusColor}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <TextBlock Text="{Binding CameraStatusText}" Foreground="{StaticResource TextPrimary}"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="连接方式" Style="{StaticResource Label}" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Row="2" Grid.Column="1" Text="USB · PC Remote"
+                                               Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+                                </Grid>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="{Binding ConnectCameraLabel}" Command="{Binding ConnectCameraCommand}"
+                                            Style="{StaticResource ActionBtn}" Padding="20,8" Margin="0,0,12,0"/>
+                                    <Button Content="重新连接" Command="{Binding ReconnectCameraCommand}"
+                                            Style="{StaticResource ActionBtn}" Padding="20,8"
+                                            IsEnabled="{Binding CameraConnected}"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 单张拍照卡 -->
+                        <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="16" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="单张拍照" FontWeight="Bold" FontSize="16"
+                                           Foreground="{StaticResource BrandPurple}" Margin="0,0,0,4"/>
+                                <TextBlock Text="用于相机测试或补拍单张，不联动转盘"
+                                           Foreground="{StaticResource TextSecondary}" FontSize="12" Margin="0,0,0,12"/>
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Grid.Column="0" Text="{Binding SaveFolder, UpdateSourceTrigger=PropertyChanged}"
+                                             Style="{StaticResource Input}" IsReadOnly="True"
+                                             ToolTip="保存目录（与自动拍摄目录共用）"/>
+                                    <Button Grid.Column="1" Content="📁" Command="{Binding ChooseFolderCommand}"
+                                            Style="{StaticResource ActionBtn}" Margin="8,0,0,0" Padding="10,8"/>
+                                </Grid>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                    <Button Content="📷 立即拍照" Command="{Binding ManualShotCommand}"
+                                            Style="{StaticResource ActionBtn}" Padding="20,10" FontSize="14"
+                                            Background="{StaticResource BrandPurple}" Foreground="#1E1E2E"
+                                            IsEnabled="{Binding CanManualShot}" Margin="0,0,12,0"/>
+                                    <TextBlock Text="{Binding ManualShotStatus}" Foreground="{StaticResource TextSecondary}"
+                                               VerticalAlignment="Center" FontSize="12"/>
+                                </StackPanel>
+                                <!-- 最新一张缩略图 -->
+                                <Border x:Name="ManualThumbBorder" Background="{StaticResource BgTertiary}" CornerRadius="4"
+                                        Height="160" Visibility="{Binding ManualThumbVisibility}">
+                                    <Image Source="{Binding ManualShotThumb}" Stretch="Uniform" Margin="4"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 拍摄前检查清单 -->
+                        <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="16" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="拍摄前检查" FontWeight="Bold" FontSize="16"
+                                           Foreground="{StaticResource BrandPurple}" Margin="0,0,0,12"/>
+                                <StackPanel>
+                                    <TextBlock Foreground="{StaticResource TextPrimary}" Margin="0,0,0,8" TextWrapping="Wrap">
+                                        <Run Text="① USB 连接模式：" FontWeight="SemiBold"/>
+                                        <Run Text="MENU → 设置 → USB → 遥控拍摄/传输"/>
+                                    </TextBlock>
+                                    <TextBlock Foreground="{StaticResource TextPrimary}" Margin="0,0,0,8" TextWrapping="Wrap">
+                                        <Run Text="② 存储卡：" FontWeight="SemiBold"/>
+                                        <Run Text="已插入，剩余空间充足（建议 &gt; 2GB）"/>
+                                    </TextBlock>
+                                    <TextBlock Foreground="{StaticResource TextPrimary}" Margin="0,0,0,8" TextWrapping="Wrap">
+                                        <Run Text="③ 电源：" FontWeight="SemiBold"/>
+                                        <Run Text="建议使用 AC 电源适配器，避免拍摄中断"/>
+                                    </TextBlock>
+                                    <TextBlock Foreground="{StaticResource TextPrimary}" Margin="0,0,0,8" TextWrapping="Wrap">
+                                        <Run Text="④ 对焦模式：" FontWeight="SemiBold"/>
+                                        <Run Text="MF（手动对焦），避免联动时抖动"/>
+                                    </TextBlock>
+                                    <TextBlock Foreground="{StaticResource TextPrimary}" TextWrapping="Wrap">
+                                        <Run Text="⑤ 其他遥控：" FontWeight="SemiBold"/>
+                                        <Run Text="断开手机等其他遥控设备"/>
+                                    </TextBlock>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 相机日志 -->
+                        <Border Background="{StaticResource BgSecondary}" CornerRadius="6" Padding="16">
+                            <StackPanel>
+                                <TextBlock Text="相机日志" FontWeight="Bold" FontSize="16"
+                                           Foreground="{StaticResource BrandPurple}" Margin="0,0,0,8"/>
+                                <ScrollViewer Height="160" VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl ItemsSource="{Binding CameraLog}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Foreground="{Binding Color}" FontSize="11"
+                                                           FontFamily="Consolas" TextWrapping="Wrap" Margin="0,1">
+                                                    <Run Text="{Binding Time, Mode=OneWay}"/>
+                                                    <Run Text=" "/>
+                                                    <Run Text="{Binding Message, Mode=OneWay}"/>
                                                 </TextBlock>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>

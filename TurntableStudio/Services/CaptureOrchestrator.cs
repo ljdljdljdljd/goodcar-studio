@@ -56,7 +56,7 @@ namespace TurntableStudio.Services
         }
 
         public async Task RunAsync(int shotCount, string saveFolder,
-            string filePrefix = "Shot", CancellationToken ct = default)
+            string filePrefix = "Shot", double leadAngle = 0.5, CancellationToken ct = default)
         {
             if (shotCount != 36 && shotCount != 72)
                 throw new ArgumentOutOfRangeException(nameof(shotCount));
